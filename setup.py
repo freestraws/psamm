@@ -59,6 +59,7 @@ setup(
             'fva = psamm.commands.fva:FluxVariabilityCommand',
             'gapfill = psamm.commands.gapfill:GapFillCommand',
             'masscheck = psamm.commands.masscheck:MassConsistencyCommand',
+            'pathways = psamm.commands.pathways:PathwaysCommand',
             'randomsparse = psamm.commands.randomsparse:RandomSparseNetworkCommand',
             'robustness = psamm.commands.robustness:RobustnessCommand',
             'sbmlexport = psamm.commands.sbmlexport:SBMLExport',
