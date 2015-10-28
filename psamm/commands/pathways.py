@@ -51,7 +51,9 @@ class PathwaysCommand(Command):
         cost_func = pathways.FormulaCostFunction(self._model)
         # cost_func = pathways.AltFormulaCostFunction(self._model)
         # cost_func = pathways.ConnectivityCostFunction(self._mm)
-        connector = pathways.Connector(self._mm, cost_func, disconnect)
+        #connector = pathways.Connector(self._model, cost_func, disconnect)
+        connector = pathways.RpairConnector(
+            self._model, cost_func, disconnect)
 
         paths = []
         for pathway, cost in pathways.find_pathways(

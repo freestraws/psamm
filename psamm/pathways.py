@@ -21,8 +21,9 @@ import logging
 from collections import Counter
 
 from .reaction import Reaction, Compound
-from .formula import Formula
+from .formula import Formula, Atom
 from .heap import Heap
+from . import rpair
 
 from six import iteritems
 
@@ -52,6 +53,13 @@ def shared_elements(f1, f2):
     return count / float(total)
 
 
+def model_compound_formulas(model):
+    formulas = {}
+    for compound in model.parse_compounds():
+        formulas[compound.id] = Formula.parse(compound.formula)
+    return formulas
+
+
 def complete_pathway(pathways, pathway, count):
     final_compound, _, cost, _ = pathway[-1]
     all_pathways = pathways.setdefault(final_compound, [])
@@ -69,9 +77,7 @@ def complete_pathway(pathways, pathway, count):
 
 class FormulaCostFunction(object):
     def __init__(self, model):
-        self._formulas = {}
-        for compound in model.parse_compounds():
-            self._formulas[compound.id] = Formula.parse(compound.formula)
+        self._formulas = model_compound_formulas(model)
 
     def _cost(self, score):
         if score == 0.0:
@@ -95,9 +101,7 @@ class FormulaCostFunction(object):
 
 class AltFormulaCostFunction(object):
     def __init__(self, model):
-        self._formulas = {}
-        for compound in model.parse_compounds():
-            self._formulas[compound.id] = Formula.parse(compound.formula)
+        self._formulas = model_compound_formulas(model)
 
     def actual_cost(self, source, dest):
         f1 = self._formulas[source.name]
@@ -137,44 +141,88 @@ class ConnectivityCostFunction(object):
 
 class Connector(object):
     def __init__(self, model, cost_func, disconnect=None):
+        self._model = model
         self._connections = {}
 
-        for reaction in model.reactions:
-            if disconnect is not None and reaction in disconnect:
+        for reaction in self._model.parse_reactions():
+            if disconnect is not None and reaction.id in disconnect:
                 continue
 
-            rx = model.get_reaction(reaction)
+            rx = reaction.equation
             if (rx.direction == Reaction.Bidir or
                     rx.direction == Reaction.Right):
                 for metabolite, _ in rx.right:
                     known_reactants = self._connections.setdefault(
                         metabolite, {})
                     for reactant, _ in rx.left:
+                        if self._filter_reaction_pairs(
+                                reaction, reactant, metabolite):
+                            continue
+
                         if reactant not in known_reactants:
                             cost = cost_func.actual_cost(reactant, metabolite)
                             if cost is None:
                                 continue
-                            known_reactants[reactant] = cost, set([reaction])
+                            known_reactants[reactant] = (
+                                cost, set([reaction.id]))
                         else:
                             _, reaction_set = known_reactants[reactant]
-                            reaction_set.add(reaction)
+                            reaction_set.add(reaction.id)
             if (rx.direction == Reaction.Bidir or
                     rx.direction == Reaction.Left):
                 for metabolite, _ in rx.left:
                     known_reactants = self._connections.setdefault(
                         metabolite, {})
                     for reactant, _ in rx.right:
+                        if self._filter_reaction_pairs(
+                                reaction, metabolite, reactant):
+                            continue
+
                         if reactant not in known_reactants:
                             cost = cost_func.actual_cost(reactant, metabolite)
                             if cost is None:
                                 continue
-                            known_reactants[reactant] = cost, set([reaction])
+                            known_reactants[reactant] = (
+                                cost, set([reaction.id]))
                         else:
                             _, reaction_set = known_reactants[reactant]
-                            reaction_set.add(reaction)
+                            reaction_set.add(reaction.id)
 
     def get(self, compound):
         return iteritems(self._connections.get(compound, {}))
+
+    def _filter_reaction_pairs(self, reaction, c_left, c_right):
+        return False
+
+
+class RpairConnector(Connector):
+    def __init__(self, model, *args, **kwargs):
+        self._rpairs = {}
+        formulas = model_compound_formulas(model)
+        for reaction in model.parse_reactions():
+            transfer, _ = rpair.predict_rpair(
+                reaction.equation, formulas)
+
+            rpairs = set()
+            for ((c1, _), (c2, _)), form in iteritems(transfer):
+                if (Atom('C') not in form and
+                        (Atom('C') in formulas[c1.name] or
+                         Atom('C') in formulas[c2.name])):
+                    continue
+                rpairs.add((c1, c2))
+
+            self._rpairs[reaction.id] = rpairs
+            logger.info('{}: {}'.format(reaction.id, rpairs))
+
+        super(RpairConnector, self).__init__(model, *args, **kwargs)
+
+    def _filter_reaction_pairs(self, reaction, c_left, c_right):
+        if (c_left, c_right) not in self._rpairs[reaction.id]:
+            logger.info('{}: Filtering {} -> {}'.format(
+                reaction.id, c_left, c_right))
+            return True
+
+        return False
 
 
 class CompoundNode(object):
