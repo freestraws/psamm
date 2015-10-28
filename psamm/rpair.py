@@ -3,7 +3,7 @@ import logging
 from itertools import product
 from operator import itemgetter
 
-from .formula import Formula
+from .formula import Formula, Atom
 
 from six import iteritems
 
@@ -11,18 +11,30 @@ from six import iteritems
 logger = logging.getLogger(__name__)
 
 
+ATOM_WEIGHT = {
+    Atom('H'): 0.0,
+}
+
+
 def shared_elements(f1, f2):
     """Calculate score of shared elements."""
 
-    f1 = dict(f1.flattened().items())
-    f2 = dict(f2.flattened().items())
-    elements = set(element for element, _ in iteritems(f1))
-    elements.update(element for element, _ in iteritems(f2))
+    d1, d2 = {}, {}
+    for a, v in f1.flattened().items():
+        d1[a] = ATOM_WEIGHT.get(a, 1.0) * v
+    for a, v in f2.flattened().items():
+        d2[a] = ATOM_WEIGHT.get(a, 1.0) * v
+
+    elements = set(element for element, _ in iteritems(d1))
+    elements.update(element for element, _ in iteritems(d2))
 
     count, total = 0, 0
     for element in elements:
-        count += min(f1.get(element, 0), f2.get(element, 0))
-        total += max(f1.get(element, 0), f2.get(element, 0))
+        count += min(d1.get(element, 0), d2.get(element, 0))
+        total += max(d1.get(element, 0), d2.get(element, 0))
+
+    if total == 0.0:
+        return 0.0
     return count / float(total)
 
 
