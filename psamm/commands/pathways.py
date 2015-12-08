@@ -18,7 +18,10 @@
 import logging
 
 from ..command import Command, CommandError
+from ..reaction import Compound
 from .. import pathways
+
+from six import iteritems, itervalues
 
 logger = logging.getLogger(__name__)
 
@@ -55,22 +58,72 @@ class PathwaysCommand(Command):
         connector = pathways.RpairConnector(
             self._model, cost_func, disconnect)
 
-        paths = []
-        for pathway, cost in pathways.find_pathways(
-                connector, cost_func, source, dest):
-            pathway = [(node.compound, node.reactions, node.g_score)
-                       for node in reversed(pathway)]
-            paths.append(pathway)
-            if len(paths) == self._args.n:
-                break
+        dests = {
+            Compound('M_ala_DASH_L_c', 'c'),
+            Compound('M_arg_DASH_L_c', 'c'),
+            Compound('M_asn_DASH_L_c', 'c'),
+            Compound('M_asp_DASH_L_c', 'c'),
+            Compound('M_atp_c', 'c'),
+            Compound('M_coa_c', 'c'),
+            Compound('M_cys_DASH_L_c', 'c'),
+            Compound('M_gln_DASH_L_c', 'c'),
+            Compound('M_leu_DASH_L_c', 'c'),
+            Compound('M_nad_c', 'c')
+        }
+
+        for dest in dests:
+            paths = []
+            stats = []
+            for pathway, cost in pathways.find_pathways(
+                    connector, cost_func, source, dest):
+                pathway = [(node.compound, node.reactions, node.g_score)
+                           for node in reversed(pathway)]
+                stats.append((len(pathway), cost))
+                paths.append(pathway)
+                if len(paths) == self._args.n:
+                    break
+
+            with open('{}_{}.tsv'.format(source, dest), 'w') as f:
+                for length, cost in stats:
+                    f.write('{}\t{}\n'.format(length, cost))
+
+            with open('{}_{}.dot'.format(source, dest), 'w') as f:
+                self.write_graph(f, paths, source, dest)
+
+    def write_graph(self, f, paths, source, dest):
+        node_compounds = set()
+        node_reactions = set()
+        edge_score = {}
 
         for pathway in paths:
             first_compound, _, cost = pathway[-1]
             logger.info('{}: {}'.format(first_compound, cost))
             prev_compound, _, _ = pathway[0]
             for compound, reactions, cost in pathway[1:]:
+                node_compounds.add(compound)
+                for reaction in reactions:
+                    node_reactions.add(reaction)
+                    for edge in ((reaction, prev_compound),
+                                 (compound, reaction)):
+                        if edge not in edge_score:
+                            edge_score[edge] = 0
+                        edge_score[edge] += 1
                 logger.info(
                     '- {} <- {}, cost={}, ({})'.format(
                         prev_compound, compound, cost,
                         ','.join(sorted(reactions))))
                 prev_compound = compound
+
+        max_score = max(itervalues(edge_score))
+
+        f.write('digraph pathways {\n')
+        for reaction in node_reactions:
+            f.write('  "{}" [shape=box];\n'.format(reaction))
+        for compound in (source, dest):
+            f.write('  "{}" [color=red];\n'.format(compound))
+        for edge, score in iteritems(edge_score):
+            source, dest = edge
+            width = (10.0 * (score - 1) / (max_score - 1)) + 1
+            f.write('  "{}" -> "{}" [penwidth={}];\n'.format(
+                source, dest, width))
+        f.write('}\n')
