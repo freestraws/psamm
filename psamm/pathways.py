@@ -81,7 +81,7 @@ class FormulaCostFunction(object):
 
     def _cost(self, score):
         if score == 0.0:
-            return None
+            return float('inf')
         return -math.log(score)
 
     def actual_cost(self, source, dest):

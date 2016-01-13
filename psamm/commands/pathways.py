@@ -16,8 +16,9 @@
 # Copyright 2015  Jon Lund Steffensen <jon_steffensen@uri.edu>
 
 import logging
+from itertools import product
 
-from ..command import Command, CommandError
+from ..command import Command, MetabolicMixin, CommandError
 from ..reaction import Compound
 from .. import pathways
 
@@ -26,7 +27,7 @@ from six import iteritems, itervalues
 logger = logging.getLogger(__name__)
 
 
-class PathwaysCommand(Command):
+class PathwaysCommand(MetabolicMixin, Command):
     """Find shortest paths between two compounds."""
 
     name = 'pathways'
@@ -58,20 +59,16 @@ class PathwaysCommand(Command):
         connector = pathways.RpairConnector(
             self._model, cost_func, disconnect)
 
-        dests = {
-            Compound('M_ala_DASH_L_c', 'c'),
-            Compound('M_arg_DASH_L_c', 'c'),
-            Compound('M_asn_DASH_L_c', 'c'),
-            Compound('M_asp_DASH_L_c', 'c'),
-            Compound('M_atp_c', 'c'),
-            Compound('M_coa_c', 'c'),
-            Compound('M_cys_DASH_L_c', 'c'),
-            Compound('M_gln_DASH_L_c', 'c'),
-            Compound('M_leu_DASH_L_c', 'c'),
-            Compound('M_nad_c', 'c')
-        }
+        biomass = self._mm.get_reaction(biomass_reaction)
+        sources = set()
+        for reaction_id in self._mm.reactions:
+            if self._mm.is_exchange(reaction_id):
+                compound, _ = next(self._mm.get_reaction_values(reaction_id))
+                sources.add(compound)
+        dests = {c for c, _ in biomass.left}
 
-        for dest in dests:
+        for source, dest in product(sources, dests):
+            logger.info('Searching for {} -> {}...'.format(source, dest))
             paths = []
             stats = []
             for pathway, cost in pathways.find_pathways(
@@ -114,6 +111,9 @@ class PathwaysCommand(Command):
                         ','.join(sorted(reactions))))
                 prev_compound = compound
 
+        if len(edge_score) == 0:
+            return
+
         max_score = max(itervalues(edge_score))
 
         f.write('digraph pathways {\n')
@@ -123,7 +123,10 @@ class PathwaysCommand(Command):
             f.write('  "{}" [color=red];\n'.format(compound))
         for edge, score in iteritems(edge_score):
             source, dest = edge
-            width = (10.0 * (score - 1) / (max_score - 1)) + 1
+            if max_score <= 1:
+                width = 1
+            else:
+                width = (10.0 * (score - 1) / (max_score - 1)) + 1
             f.write('  "{}" -> "{}" [penwidth={}];\n'.format(
                 source, dest, width))
         f.write('}\n')
