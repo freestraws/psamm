@@ -31,13 +31,6 @@ from six import iteritems
 logger = logging.getLogger(__name__)
 
 
-def parse_compound(s):
-    m = re.match(r'(.*)\[(\w+)\]', s)
-    if m:
-        return Compound(m.group(1), compartment=m.group(2))
-    return Compound(s, compartment=None)
-
-
 def shared_elements(f1, f2):
     """Calculate score of shared elements"""
 

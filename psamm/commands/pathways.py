@@ -17,10 +17,12 @@
 
 import logging
 from itertools import product
+from collections import defaultdict
 
 from ..command import Command, MetabolicMixin, CommandError
 from ..reaction import Compound
 from .. import pathways
+from ..datasource.reaction import parse_compound
 
 from six import iteritems, itervalues
 
@@ -35,18 +37,17 @@ class PathwaysCommand(MetabolicMixin, Command):
 
     @classmethod
     def init_parser(cls, parser):
-        parser.add_argument('source', type=pathways.parse_compound,
-                            help='Source compound')
-        parser.add_argument('dest', type=pathways.parse_compound,
-                            help='Destination compound')
+        parser.add_argument(
+            '--source', type=parse_compound,
+            action='append', default=None, help='Source compound')
+        parser.add_argument(
+            '--dest', type=parse_compound,
+            action='append', default=None, help='Destination compound')
         parser.add_argument('-n', type=int, default=5,
                             help='Number of pathways to find')
         super(PathwaysCommand, cls).init_parser(parser)
 
     def run(self):
-        source = self._args.source
-        dest = self._args.dest
-
         biomass_reaction = self._model.get_biomass_reaction()
         disconnect = set()
         if biomass_reaction is not None:
@@ -59,13 +60,21 @@ class PathwaysCommand(MetabolicMixin, Command):
         connector = pathways.RpairConnector(
             self._model, cost_func, disconnect)
 
-        biomass = self._mm.get_reaction(biomass_reaction)
-        sources = set()
-        for reaction_id in self._mm.reactions:
-            if self._mm.is_exchange(reaction_id):
-                compound, _ = next(self._mm.get_reaction_values(reaction_id))
-                sources.add(compound)
-        dests = {c for c, _ in biomass.left}
+        if self._args.source is not None:
+            sources = set(self._args.source)
+        else:
+            sources = set()
+            for reaction_id in self._mm.reactions:
+                if self._mm.is_exchange(reaction_id):
+                    compound, _ = next(
+                        self._mm.get_reaction_values(reaction_id))
+                    sources.add(compound)
+
+        if self._args.dest is not None:
+            dests = set(self._args.dest)
+        else:
+            biomass = self._mm.get_reaction(biomass_reaction)
+            dests = {c for c, _ in biomass.left}
 
         for source, dest in product(sources, dests):
             logger.info('Searching for {} -> {}...'.format(source, dest))
@@ -80,18 +89,22 @@ class PathwaysCommand(MetabolicMixin, Command):
                 if len(paths) == self._args.n:
                     break
 
-            with open('{}_{}.tsv'.format(source, dest), 'w') as f:
-                for length, cost in stats:
-                    f.write('{}\t{}\n'.format(length, cost))
+            if len(paths) > 0:
+                with open('{}_{}.tsv'.format(source, dest), 'w') as f:
+                    for length, cost in stats:
+                        f.write('{}\t{}\n'.format(length, cost))
 
-            with open('{}_{}.dot'.format(source, dest), 'w') as f:
-                self.write_graph(f, paths, source, dest)
+                with open('{}_{}.dot'.format(source, dest), 'w') as f:
+                    self.write_graph(f, paths, source, dest)
 
     def write_graph(self, f, paths, source, dest):
+        if len(paths) == 0:
+            return
+
         node_compounds = set()
         node_reactions = set()
-        edge_score = {}
-
+        edges = set()
+        edge_use_count = defaultdict(int)
         for pathway in paths:
             first_compound, _, cost = pathway[-1]
             logger.info('{}: {}'.format(first_compound, cost))
@@ -102,31 +115,76 @@ class PathwaysCommand(MetabolicMixin, Command):
                     node_reactions.add(reaction)
                     for edge in ((reaction, prev_compound),
                                  (compound, reaction)):
-                        if edge not in edge_score:
-                            edge_score[edge] = 0
-                        edge_score[edge] += 1
+                        edges.add(edge)
+                        edge_use_count[edge] += 1
                 logger.info(
                     '- {} <- {}, cost={}, ({})'.format(
                         prev_compound, compound, cost,
                         ','.join(sorted(reactions))))
                 prev_compound = compound
 
-        if len(edge_score) == 0:
-            return
+        max_use_count = max(itervalues(edge_use_count))
 
-        max_score = max(itervalues(edge_score))
+        width, height = 50, 50
+        margin = 0.5
 
-        f.write('digraph pathways {\n')
+        edge_props = defaultdict(dict)
+        reaction_props = defaultdict(dict)
+        compound_props = defaultdict(dict)
+
         for reaction in node_reactions:
-            f.write('  "{}" [shape=box];\n'.format(reaction))
-        for compound in (source, dest):
-            f.write('  "{}" [color=red];\n'.format(compound))
-        for edge, score in iteritems(edge_score):
-            source, dest = edge
-            if max_score <= 1:
+            reaction_props[reaction]['shape'] = 'box'
+
+        for edge in edges:
+            use_count = edge_use_count[edge]
+            if max_use_count <= 1:
                 width = 1
             else:
-                width = (10.0 * (score - 1) / (max_score - 1)) + 1
-            f.write('  "{}" -> "{}" [penwidth={}];\n'.format(
-                source, dest, width))
+                width = (10.0 * (use_count - 1) / (max_use_count - 1)) + 1
+            edge_props[edge]['penwidth'] = width
+
+        step = (height - 2*margin) / len(paths[0])
+        prev_compound = None
+        for i, (compound, reactions, _) in enumerate(paths[0]):
+            compound_props[compound]['color'] = 'red'
+            compound_props[compound]['pos'] = '"{},{}!"'.format(
+                width / 2, margin + i*step)
+
+            if reactions is not None:
+                for reaction in reactions:
+                    reaction_props[reaction]['color'] = 'red'
+                    edge_props[compound, reaction]['color'] = 'red'
+                    edge_props[reaction, prev_compound]['color'] = 'red'
+
+            prev_compound = compound
+
+        f.write('digraph pathways {\n')
+        f.write('  size="{},{}!";\n'.format(width, height))
+        f.write('  dpi=300;\n')
+
+        for reaction in node_reactions:
+            if reaction in reaction_props:
+                props = reaction_props[reaction]
+                f.write('  "{}" [{}];\n'.format(
+                    reaction, ','.join('{}={}'.format(k, v)
+                                       for k, v in iteritems(props))))
+
+        for compound in node_compounds:
+            if compound in compound_props:
+                props = compound_props[compound]
+                f.write('  "{}" [{}];\n'.format(
+                    compound, ','.join('{}={}'.format(k, v)
+                                       for k, v in iteritems(props))))
+
+        for (source, dest) in edges:
+            props = edge_props.get((source, dest), {})
+            if len(props) > 0:
+                prop_string = ' [{}]'.format(
+                    ','.join('{}={}'.format(k, v)
+                             for k, v in iteritems(props)))
+            else:
+                prop_string = ''
+            f.write('  "{}" -> "{}"{};\n'.format(
+                source, dest, prop_string))
+
         f.write('}\n')
