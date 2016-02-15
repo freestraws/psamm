@@ -92,6 +92,23 @@ class FormulaCostFunction(object):
         return self.actual_cost(source, dest)
 
 
+class JaccardCostFunction(object):
+    def __init__(self, model):
+        self._formulas = model_compound_formulas(model)
+
+    def _cost(self, score):
+        return 1 - score
+
+    def actual_cost(self, source, dest):
+        f1, f2 = self._formulas[source.name], self._formulas[dest.name]
+        return self._cost(0.999 * shared_elements(f1, f2))
+
+    def admissible_cost(self, source, dest):
+        if source == dest:
+            return 0.0
+        return self.actual_cost(source, dest)
+
+
 class AltFormulaCostFunction(object):
     def __init__(self, model):
         self._formulas = model_compound_formulas(model)
