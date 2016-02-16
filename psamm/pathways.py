@@ -159,8 +159,7 @@ class Connector(object):
                 continue
 
             rx = reaction.equation
-            if (rx.direction == Reaction.Bidir or
-                    rx.direction == Reaction.Right):
+            if rx.direction.forward:
                 for metabolite, _ in rx.right:
                     known_reactants = self._connections.setdefault(
                         metabolite, {})
@@ -178,8 +177,7 @@ class Connector(object):
                         else:
                             _, reaction_set = known_reactants[reactant]
                             reaction_set.add(reaction.id)
-            if (rx.direction == Reaction.Bidir or
-                    rx.direction == Reaction.Left):
+            if rx.direction.reverse:
                 for metabolite, _ in rx.left:
                     known_reactants = self._connections.setdefault(
                         metabolite, {})
