@@ -196,8 +196,19 @@ class Connector(object):
                             _, reaction_set = known_reactants[reactant]
                             reaction_set.add(reaction.id)
 
-    def get(self, compound):
+    def compounds(self):
+        return iter(self._connections)
+
+    def iter_all(self, compound):
         return iteritems(self._connections.get(compound, {}))
+
+    def has(self, c1, c2):
+        return c1 in self._connections and c2 in self._connections[c1]
+
+    def get(self, c1, c2):
+        if c1 not in self._connections:
+            return None
+        return self._connections[c1].get(c2, None)
 
     def _filter_reaction_pairs(self, reaction, c_left, c_right):
         return False
@@ -275,7 +286,7 @@ def find_pathways(connector, cost_func, source, dest):
             yield list(node.pathway()), node.g_score
             continue
 
-        for next_compound, (next_cost, next_reactions) in connector.get(
+        for next_compound, (next_cost, next_reactions) in connector.iter_all(
                 node.compound):
             if any(n.compound == next_compound for n in node.pathway()):
                 logger.info('Skipping neighbor already in path {}'.format(
@@ -300,3 +311,28 @@ def find_pathways(connector, cost_func, source, dest):
             if (next_compound not in compound_nodes or
                     compound_nodes[next_compound].g_score > g_score):
                 compound_nodes[next_compound] = next_node
+
+
+def check_cost_function(connector, cost_func):
+    """Check that the triangle inequalite holds for valid triplets."""
+
+    for c1 in connector.compounds():
+        logger.info('Checking compound {}...'.format(c1))
+        for c2, (cost1, _) in connector.iter_all(c1):
+            for c3, (cost2, _) in connector.iter_all(c2):
+                if connector.has(c1, c3):
+                    cost3, _ = connector.get(c1, c3)
+                    if cost1 + cost2 < cost3:
+                        logger.warning(
+                            'Invalid distance:'
+                            ' {} -> {}: {}, {} -> {}: {}, {} -> {}: {}'.format(
+                                c1, c2, cost1, c2, c3, cost2, c1, c3, cost3))
+
+                # Must not overestimate
+                ad_cost3 = cost_func.admissible_cost(c1, c3)
+                if cost1 + cost2 < ad_cost3:
+                    logger.warning(
+                        'Invalid admissible cost:'
+                        ' {} -> {}: {}, {} -> {}: {},'
+                        ' {} -> {}: ({})'.format(
+                            c1, c2, cost1, c2, c3, cost2, c1, c3, ad_cost3))
