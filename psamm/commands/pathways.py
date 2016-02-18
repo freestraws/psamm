@@ -142,10 +142,10 @@ class PathwaysCommand(MetabolicMixin, Command):
         for edge in edges:
             use_count = edge_use_count[edge]
             if max_use_count <= 1:
-                width = 1
+                pen_width = 1
             else:
-                width = (10.0 * (use_count - 1) / (max_use_count - 1)) + 1
-            edge_props[edge]['penwidth'] = width
+                pen_width = (10.0 * (use_count - 1) / (max_use_count - 1)) + 1
+            edge_props[edge]['penwidth'] = pen_width
 
         step = (height - 2*margin) / len(paths[0])
         prev_compound = None
