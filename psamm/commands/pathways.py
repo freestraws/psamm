@@ -53,13 +53,18 @@ class PathwaysCommand(MetabolicMixin, Command):
         if biomass_reaction is not None:
             disconnect.add(biomass_reaction)
 
+        if self._model.has_model_definition():
+            subset = set(self._model.parse_model())
+        else:
+            subset = None
+
         #cost_func = pathways.FormulaCostFunction(self._model)
         cost_func = pathways.JaccardCostFunction(self._model)
         # cost_func = pathways.AltFormulaCostFunction(self._model)
         # cost_func = pathways.ConnectivityCostFunction(self._mm)
         #connector = pathways.Connector(self._model, cost_func, disconnect)
         connector = pathways.RpairConnector(
-            self._model, cost_func, disconnect)
+            self._model, subset, cost_func, disconnect)
 
         if self._args.source is not None:
             sources = set(self._args.source)

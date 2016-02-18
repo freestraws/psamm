@@ -215,10 +215,12 @@ class Connector(object):
 
 
 class RpairConnector(Connector):
-    def __init__(self, model, *args, **kwargs):
+    def __init__(self, model, subset, *args, **kwargs):
         self._rpairs = {}
         formulas = model_compound_formulas(model)
         for reaction in model.parse_reactions():
+            if subset is not None and reaction.id not in subset:
+                continue
             transfer, _ = rpair.predict_rpair(
                 reaction.equation, formulas)
 
@@ -236,7 +238,7 @@ class RpairConnector(Connector):
         super(RpairConnector, self).__init__(model, *args, **kwargs)
 
     def _filter_reaction_pairs(self, reaction, c_left, c_right):
-        if (c_left, c_right) not in self._rpairs[reaction.id]:
+        if (c_left, c_right) not in self._rpairs.get(reaction.id, set()):
             logger.info('{}: Filtering {} -> {}'.format(
                 reaction.id, c_left, c_right))
             return True
