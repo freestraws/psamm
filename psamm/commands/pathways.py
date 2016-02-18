@@ -60,6 +60,7 @@ class PathwaysCommand(MetabolicMixin, Command):
 
         #cost_func = pathways.FormulaCostFunction(self._model)
         cost_func = pathways.JaccardCostFunction(self._model)
+        #cost_func = pathways.UniformCostFunction()
         # cost_func = pathways.AltFormulaCostFunction(self._model)
         # cost_func = pathways.ConnectivityCostFunction(self._mm)
         #connector = pathways.Connector(self._model, cost_func, disconnect)

@@ -109,6 +109,16 @@ class JaccardCostFunction(object):
         return self.actual_cost(source, dest)
 
 
+class UniformCostFunction(object):
+    def actual_cost(self, source, dest):
+        if source == dest:
+            return 0
+        return 1
+
+    def admissible_cost(self, source, dest):
+        return self.actual_cost(source, dest)
+
+
 class AltFormulaCostFunction(object):
     def __init__(self, model):
         self._formulas = model_compound_formulas(model)
