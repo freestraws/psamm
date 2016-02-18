@@ -32,9 +32,6 @@ logger = logging.getLogger(__name__)
 class PathwaysCommand(MetabolicMixin, Command):
     """Find shortest paths between two compounds."""
 
-    name = 'pathways'
-    title = 'Find shortest paths between two compounds'
-
     @classmethod
     def init_parser(cls, parser):
         parser.add_argument(
