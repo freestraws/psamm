@@ -20,12 +20,13 @@ import math
 import logging
 from collections import Counter
 
-from .reaction import Reaction, Compound
+from .reaction import Reaction, Compound, Direction
 from .formula import Formula, Atom
 from .heap import Heap
 from . import rpair
 
 from six import iteritems
+from six.moves import zip_longest
 
 
 logger = logging.getLogger(__name__)
@@ -160,12 +161,15 @@ class ConnectivityCostFunction(object):
 
 
 class Connector(object):
-    def __init__(self, model, cost_func, disconnect=None):
+    def __init__(self, model, subset):
         self._model = model
+        self._subset = subset
         self._connections = {}
+        self._cache_pairs()
 
+    def _cache_pairs(self):
         for reaction in self._model.parse_reactions():
-            if disconnect is not None and reaction.id in disconnect:
+            if self._subset is not None and reaction.id not in self._subset:
                 continue
 
             rx = reaction.equation
@@ -178,15 +182,12 @@ class Connector(object):
                                 reaction, reactant, metabolite):
                             continue
 
-                        if reactant not in known_reactants:
-                            cost = cost_func.actual_cost(reactant, metabolite)
-                            if cost is None:
-                                continue
-                            known_reactants[reactant] = (
-                                cost, set([reaction.id]))
-                        else:
-                            _, reaction_set = known_reactants[reactant]
-                            reaction_set.add(reaction.id)
+                        entry = self._cache_state(
+                            reaction, Direction.Forward, reactant, metabolite)
+                        if entry is not None:
+                            reactions = known_reactants.setdefault(
+                                reactant, {})
+                            reactions[reaction.id, Direction.Forward] = entry
             if rx.direction.reverse:
                 for metabolite, _ in rx.left:
                     known_reactants = self._connections.setdefault(
@@ -196,15 +197,12 @@ class Connector(object):
                                 reaction, metabolite, reactant):
                             continue
 
-                        if reactant not in known_reactants:
-                            cost = cost_func.actual_cost(reactant, metabolite)
-                            if cost is None:
-                                continue
-                            known_reactants[reactant] = (
-                                cost, set([reaction.id]))
-                        else:
-                            _, reaction_set = known_reactants[reactant]
-                            reaction_set.add(reaction.id)
+                        entry = self._cache_state(
+                            reaction, Direction.Reverse, reactant, metabolite)
+                        if entry is not None:
+                            reactions = known_reactants.setdefault(
+                                reactant, {})
+                            reactions[reaction.id, Direction.Reverse] = entry
 
     def compounds(self):
         return iter(self._connections)
@@ -224,8 +222,23 @@ class Connector(object):
         return False
 
 
-class RpairConnector(Connector):
-    def __init__(self, model, subset, *args, **kwargs):
+class CostConnector(Connector):
+    def __init__(self, model, subset, cost_func):
+        self._cost_func = cost_func
+        super(CostConnector, self).__init__(model, subset)
+
+    def _cache_state(self, reaction, direction, reactant, metabolite):
+        return self.actual_cost(reaction.id, reactant, metabolite)
+
+    def admissible_cost(self, source, dest):
+        return self._cost_func.admissible_cost(source, dest)
+
+    def actual_cost(self, reaction, source, dest):
+        return self._cost_func.actual_cost(source, dest)
+
+
+class RpairConnector(CostConnector):
+    def __init__(self, model, subset, cost_func):
         self._rpairs = {}
         formulas = model_compound_formulas(model)
         for reaction in model.parse_reactions():
@@ -234,32 +247,65 @@ class RpairConnector(Connector):
             transfer, _ = rpair.predict_rpair(
                 reaction.equation, formulas)
 
-            rpairs = set()
+            rpairs = {}
             for ((c1, _), (c2, _)), form in iteritems(transfer):
                 if (Atom('C') not in form and
                         (Atom('C') in formulas[c1.name] or
                          Atom('C') in formulas[c2.name])):
                     continue
-                rpairs.add((c1, c2))
+                rpairs[c1, c2] = form
 
             self._rpairs[reaction.id] = rpairs
             logger.info('{}: {}'.format(reaction.id, rpairs))
 
-        super(RpairConnector, self).__init__(model, *args, **kwargs)
+        super(RpairConnector, self).__init__(model, subset, cost_func)
 
     def _filter_reaction_pairs(self, reaction, c_left, c_right):
-        if (c_left, c_right) not in self._rpairs.get(reaction.id, set()):
+        if (c_left, c_right) not in self._rpairs.get(reaction.id, {}):
             logger.info('{}: Filtering {} -> {}'.format(
                 reaction.id, c_left, c_right))
             return True
 
+        logger.info('{}: Allowing {} -> {}'.format(
+            reaction.id, c_left, c_right))
         return False
 
 
+class RpairConnectorCommon(RpairConnector):
+    def __init__(self, model, subset, cost_func):
+        self._formulas = model_compound_formulas(model)
+        self._backbone = None
+        super(RpairConnectorCommon, self).__init__(model, subset, cost_func)
+
+    def set_source_dest(self, source, dest):
+        self._backbone = rpair.formula_common(
+            self._formulas[source.name], self._formulas[dest.name])
+        self._cache_pairs()
+
+    def actual_cost(self, reaction, source, dest):
+        if self._backbone is not None:
+            transfer = self._rpairs.get(reaction, {}).get((source, dest))
+            if transfer is None:
+                return None
+
+            score, w_score = rpair.shared_elements(
+                rpair.formula_common(transfer, self._backbone),
+                self._backbone)
+
+            if w_score < 0.3:
+                logger.info(
+                    '{}: Filtering {} -> {} because of low backbone'
+                    ' similarity: {}'.format(reaction, source, dest, w_score))
+                return None
+
+        return super(RpairConnectorCommon, self).actual_cost(
+            reaction, source, dest)
+
+
 class CompoundNode(object):
-    def __init__(self, compound, reactions, f_score, g_score, previous):
+    def __init__(self, compound, reaction, f_score, g_score, previous):
         self.compound = compound
-        self.reactions = reactions
+        self.reaction = reaction
         self.f_score = f_score
         self.g_score = g_score
         self.previous = previous
@@ -271,12 +317,15 @@ class CompoundNode(object):
             node = node.previous
 
     def __repr__(self):
-        return '<{} at {}, f={:.4f}, g={:.4f}>'.format(
-            self.__class__.__name__, self.compound, self.f_score, self.g_score)
+        reaction = None if self.reaction is None else '{}[{}]'.format(
+            self.reaction[0], self.reaction[1].symbol)
+        return '<{} at {}<-{}, f={:.4f}, g={:.4f}>'.format(
+            self.__class__.__name__, self.compound, reaction,
+            self.f_score, self.g_score)
 
 
-def find_pathways(connector, cost_func, source, dest):
-    initial_cost = cost_func.admissible_cost(dest, source)
+def find_pathways(connector, source, dest):
+    initial_cost = connector.admissible_cost(dest, source)
     initial_node = CompoundNode(dest, None, initial_cost, 0.0, None)
 
     compound_nodes = {dest: initial_node}
@@ -298,34 +347,54 @@ def find_pathways(connector, cost_func, source, dest):
             yield list(node.pathway()), node.g_score
             continue
 
-        for next_compound, (next_cost, next_reactions) in connector.iter_all(
-                node.compound):
-            if any(n.compound == next_compound for n in node.pathway()):
-                logger.info('Skipping neighbor already in path {}'.format(
-                    next_compound))
+        for next_compound, next_reactions in connector.iter_all(node.compound):
+            skip_compound = False
+            for n in node.pathway():
+                if n.compound == next_compound:
+                    skip_compound = True
+                    break
+
+            if skip_compound:
                 continue
 
-            g_score = node.g_score + next_cost
+            for (next_reaction, direction), next_cost in iteritems(
+                    next_reactions):
+                skip_reaction = False
+                for n in node.pathway():
+                    rev_rx = next_reaction, direction.flipped()
+                    if n.reaction == rev_rx:
+                        logger.info(
+                            'Skipping reaction that is already'
+                            ' used in the reverse direction: {}'.format(
+                                next_reaction))
+                        skip_reaction = True
+                        break
 
-            try:
-                node_cost = cost_func.admissible_cost(next_compound, source)
-            except ValueError:
-                continue
-            logger.info('Allowing reaction from {} to {}'
-                        ' with admissible cost {}, step_cost={}'.format(
-                            node.compound, next_compound,
-                            g_score + node_cost, next_cost))
+                if skip_reaction:
+                    continue
 
-            next_node = CompoundNode(
-                next_compound, next_reactions, g_score + node_cost,
-                g_score, node)
-            paths_heap.push(next_node)
-            if (next_compound not in compound_nodes or
-                    compound_nodes[next_compound].g_score > g_score):
-                compound_nodes[next_compound] = next_node
+                g_score = node.g_score + next_cost
+
+                try:
+                    node_cost = connector.admissible_cost(
+                        next_compound, source)
+                except ValueError:
+                    continue
+                logger.info('Allowing reaction from {} to {} through {}'
+                            ' with admissible cost {}, step_cost={}'.format(
+                                node.compound, next_compound,
+                                next_reaction, g_score + node_cost, next_cost))
+
+                next_node = CompoundNode(
+                    next_compound, (next_reaction, direction),
+                    g_score + node_cost, g_score, node)
+                paths_heap.push(next_node)
+                if (next_compound not in compound_nodes or
+                        compound_nodes[next_compound].g_score > g_score):
+                    compound_nodes[next_compound] = next_node
 
 
-def check_cost_function(connector, cost_func):
+def check_cost_function(connector):
     """Check that the triangle inequalite holds for valid triplets."""
 
     for c1 in connector.compounds():
@@ -341,7 +410,7 @@ def check_cost_function(connector, cost_func):
                                 c1, c2, cost1, c2, c3, cost2, c1, c3, cost3))
 
                 # Must not overestimate
-                ad_cost3 = cost_func.admissible_cost(c1, c3)
+                ad_cost3 = conntector.admissible_cost(c1, c3)
                 if cost1 + cost2 < ad_cost3:
                     logger.warning(
                         'Invalid admissible cost:'
