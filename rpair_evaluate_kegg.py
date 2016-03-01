@@ -19,12 +19,14 @@ def formula_is_only_h(form):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
 
     compound_formula = {}
+    compound_name = {}
     compound_not_parsed = 0
     with open(sys.argv[1], 'r') as f:
         for entry in kegg.parse_compound_file(f):
+            compound_name[entry.id] = entry.name
             if entry.formula is not None:
                 try:
                     form = Formula.parse(entry.formula)
@@ -105,10 +107,16 @@ if __name__ == '__main__':
                         entry_matched += 1
                     else:
                         entry_mismatched += 1
+                        print('{}: {} ({}): {} not in KEGG'.format(
+                            entry.id, entry.name, entry.definition,
+                            tuple(compound_name[x] for x in pair)))
             for pair, rp_type in iteritems(actual):
                 if rp_type == 'main':
                     if pair not in predicted:
                         entry_missing += 1
+                        print('{}: {} ({}): {} not predicted'.format(
+                            entry.id, entry.name, entry.definition,
+                            tuple(compound_name[x] for x in pair)))
 
             if entry_mismatched > 0 or entry_missing > 0:
                 logger.info('===== {} ====='.format(entry.id))
