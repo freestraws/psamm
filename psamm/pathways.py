@@ -338,7 +338,7 @@ def find_pathways(connector, source, dest):
     while len(paths_heap) > 0:
         node = paths_heap.pop()
 
-        logger.info(
+        logger.debug(
             'Following reaction from {} to {} for new cost {} ({})...'.format(
                 node.previous, node.compound, node.g_score, node.f_score))
 
@@ -363,7 +363,7 @@ def find_pathways(connector, source, dest):
                 for n in node.pathway():
                     rev_rx = next_reaction, direction.flipped()
                     if n.reaction == rev_rx:
-                        logger.info(
+                        logger.debug(
                             'Skipping reaction that is already'
                             ' used in the reverse direction: {}'.format(
                                 next_reaction))
@@ -380,10 +380,11 @@ def find_pathways(connector, source, dest):
                         next_compound, source)
                 except ValueError:
                     continue
-                logger.info('Allowing reaction from {} to {} through {}'
-                            ' with admissible cost {}, step_cost={}'.format(
-                                node.compound, next_compound,
-                                next_reaction, g_score + node_cost, next_cost))
+                logger.debug(
+                    'Allowing reaction from {} to {} through {}'
+                    ' with admissible cost {}, step_cost={}'.format(
+                        node.compound, next_compound,
+                        next_reaction, g_score + node_cost, next_cost))
 
                 next_node = CompoundNode(
                     next_compound, (next_reaction, direction),
