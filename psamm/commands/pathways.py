@@ -44,7 +44,7 @@ class PathwaysCommand(MetabolicMixin, Command):
         parser.add_argument(
             '--dest', type=parse_compound,
             action='append', default=None, help='Destination compound')
-        parser.add_argument('-n', type=int, default=5,
+        parser.add_argument('-n', type=int, default=None,
                             help='Number of pathways to find')
         super(PathwaysCommand, cls).init_parser(parser)
 
