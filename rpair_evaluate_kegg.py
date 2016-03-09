@@ -2,6 +2,8 @@
 
 import sys
 import logging
+from collections import Counter
+from itertools import product
 
 from psamm.formula import Formula, Atom
 from psamm.rpair import predict_rpair
@@ -42,7 +44,13 @@ if __name__ == '__main__':
     logger.info('Compounds: {}, (not parsed: {})'.format(
         len(compound_formula), compound_not_parsed))
 
-    skipped_non_integer, skipped_unknown_formula, skipped_unbalanced = 0, 0, 0
+    pairs = {}
+    not_pairs = {}
+
+    skipped_non_integer = 0
+    skipped_unknown_formula = 0
+    skipped_unbalanced = 0
+    skipped_empty_rpairs = 0
     matched, mismatched, missing = 0, 0, 0
     reaction_count = 0
     with open(sys.argv[2], 'r') as f:
@@ -63,6 +71,12 @@ if __name__ == '__main__':
                 logger.info('Unknown formula for reaction compounds!'
                             ' Skipping reaction...')
                 skipped_unknown_formula += 1
+                continue
+
+            entry_rpairs = list(entry.rpairs)
+            if len(entry_rpairs) == 0:
+                logger.info('Skipping reaction with no reaction pairs!')
+                skipped_empty_rpairs += 1
                 continue
 
             logger.debug(entry.id)
@@ -112,11 +126,17 @@ if __name__ == '__main__':
                             tuple(compound_name[x] for x in pair)))
             for pair, rp_type in iteritems(actual):
                 if rp_type == 'main':
+                    pairs.setdefault(pair, set()).add(entry.id)
                     if pair not in predicted:
                         entry_missing += 1
                         print('{}: {} ({}): {} not predicted'.format(
                             entry.id, entry.name, entry.definition,
                             tuple(compound_name[x] for x in pair)))
+
+            for (c1, _), (c2, _) in product(reaction.left, reaction.right):
+                pair = tuple(sorted([c1.name, c2.name]))
+                if pair not in actual:
+                    not_pairs.setdefault(pair, set()).add(entry.id)
 
             if entry_mismatched > 0 or entry_missing > 0:
                 logger.info('===== {} ====='.format(entry.id))
@@ -135,7 +155,8 @@ if __name__ == '__main__':
 
     logger.info('Reactions: {}'.format(reaction_count))
     logger.info('Skipped: {} (non-integer), {} (unknown formula),'
-                ' {} (unbalanced)'.format(
-        skipped_non_integer, skipped_unknown_formula, skipped_unbalanced))
+                ' {} (unbalanced), {} (empty rpairs)'.format(
+        skipped_non_integer, skipped_unknown_formula, skipped_unbalanced,
+        skipped_empty_rpairs))
     logger.info('Matched: {}, mismatched: {}, missing: {}'.format(
         matched, mismatched, missing))
