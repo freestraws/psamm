@@ -67,6 +67,15 @@ class PathwaysCommand(MetabolicMixin, Command):
         #connector = pathways.Connector(self._model, cost_func, disconnect)
         connector = pathways.RpairConnector(self._model, subset, cost_func)
 
+        with open('reactions.tsv', 'w') as f:
+            self.write_reaction_matrix(f, self._mm)
+
+        with open('reaction_compounds.tsv', 'w') as f:
+            self.write_reaction_compounds_matrix(f, self._mm)
+
+        with open('connector_compounds.tsv', 'w') as f:
+            self.write_connector_compounds_matrix(f, self._mm, connector)
+
         with open('connector.dot', 'w') as f:
             self.write_connector_graph(f, connector)
 
@@ -102,6 +111,8 @@ class PathwaysCommand(MetabolicMixin, Command):
                 if len(paths) == self._args.n:
                     break
 
+            logger.info('Found {} paths'.format(len(paths)))
+
             if len(paths) > 0:
                 with open('{}_{}.tsv'.format(source, dest), 'w') as f:
                     for length, cost in stats:
@@ -109,6 +120,43 @@ class PathwaysCommand(MetabolicMixin, Command):
 
                 with open('{}_{}.dot'.format(source, dest), 'w') as f:
                     self.write_graph(f, paths, source, dest)
+
+    def write_reaction_matrix(self, f, model):
+        compounds = sorted(model.compounds)
+        reactions = sorted(model.reactions)
+
+        connections = {}
+        for reaction in model.reactions:
+            rx = model.get_reaction(reaction)
+            for compound, value in rx.compounds:
+                connections.setdefault(compound, {})[reaction] = value
+
+        f.write('\t'.join(str(r) for r in reactions) + '\n')
+        for compound in compounds:
+            values = [connections.get(compound, {}).get(r, 0)
+                      for r in reactions]
+            f.write('{}\t{}\n'.format(
+                compound, '\t'.join(str(x) for x in values)))
+
+    def write_reaction_compounds_matrix(self, f, model):
+        compounds = sorted(model.compounds)
+        compound_index = {c: i for i, c in enumerate(compounds)}
+
+        connections = {}
+        for reaction in model.reactions:
+            rx = model.get_reaction(reaction)
+            for (c1, _), (c2, _) in product(rx.left, rx.right):
+                if rx.direction.forward:
+                    connections.setdefault(c1, set()).add(c2)
+                if rx.direction.reverse:
+                    connections.setdefault(c2, set()).add(c1)
+
+        f.write('\t'.join(str(c) for c in compounds) + '\n')
+        for compound in compounds:
+            values = (int(c in connections.get(compound, set()))
+                      for c in compounds)
+            f.write('{}\t{}\n'.format(
+                compound, '\t'.join(str(x) for x in values)))
 
     def write_reaction_graph(self, f, model, subset):
         f.write('digraph pathways {\n')
@@ -138,6 +186,19 @@ class PathwaysCommand(MetabolicMixin, Command):
                     reaction, c, dir_value(rx.direction)))
 
         f.write('}\n')
+
+    def write_connector_compounds_matrix(self, f, model, connector):
+        compounds = sorted(model.compounds)
+        compound_index = {c: i for i, c in enumerate(compounds)}
+
+        f.write('\t'.join(str(c) for c in compounds) + '\n')
+        for compound in compounds:
+            values = [0 for c in compounds]
+            for other, _ in connector.iter_all(compound):
+                values[compound_index[other]] = 1
+
+            f.write('{}\t{}\n'.format(
+                compound, '\t'.join(str(x) for x in values)))
 
     def write_connector_graph(self, f, connector):
         f.write('digraph pathways {\n')
