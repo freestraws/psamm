@@ -249,7 +249,8 @@ class RpairConnector(CostConnector):
 
             rpairs = {}
             for ((c1, _), (c2, _)), form in iteritems(transfer):
-                if (Atom('C') not in form and
+                form_dict = dict(form.items())
+                if (form_dict.get(Atom('C'), 0) <= 1 and
                         (Atom('C') in formulas[c1.name] or
                          Atom('C') in formulas[c2.name])):
                     continue
