@@ -19,6 +19,7 @@ import re
 import math
 import logging
 from collections import Counter
+from itertools import product
 
 from .reaction import Reaction, Compound, Direction
 from .formula import Formula, Atom
@@ -401,21 +402,30 @@ def check_cost_function(connector):
 
     for c1 in connector.compounds():
         logger.info('Checking compound {}...'.format(c1))
-        for c2, (cost1, _) in connector.iter_all(c1):
-            for c3, (cost2, _) in connector.iter_all(c2):
+        for c2, c1_reactions in connector.iter_all(c1):
+            for c3, c2_reactions in connector.iter_all(c2):
                 if connector.has(c1, c3):
-                    cost3, _ = connector.get(c1, c3)
-                    if cost1 + cost2 < cost3:
-                        logger.warning(
-                            'Invalid distance:'
-                            ' {} -> {}: {}, {} -> {}: {}, {} -> {}: {}'.format(
-                                c1, c2, cost1, c2, c3, cost2, c1, c3, cost3))
+                    for (r1, cost1), (r2, cost2), (r3, cost3) in product(
+                            iteritems(c1_reactions),
+                            iteritems(c2_reactions),
+                            iteritems(connector.get(c1, c3))):
+                        if cost1 + cost2 < cost3:
+                            logger.warning(
+                                'Invalid distance:'
+                                ' {} -> {} ({}): {}, {} -> {} ({}): {},'
+                                ' {} -> {} ({}): {}'.format(
+                                    c1, c2, r1, cost1, c2, c3, r2, cost2,
+                                    c1, c3, r3, cost3))
 
                 # Must not overestimate
-                ad_cost3 = conntector.admissible_cost(c1, c3)
-                if cost1 + cost2 < ad_cost3:
-                    logger.warning(
-                        'Invalid admissible cost:'
-                        ' {} -> {}: {}, {} -> {}: {},'
-                        ' {} -> {}: ({})'.format(
-                            c1, c2, cost1, c2, c3, cost2, c1, c3, ad_cost3))
+                ad_cost3 = connector.admissible_cost(c1, c3)
+                for (r1, cost1), (r2, cost2) in product(
+                        iteritems(c1_reactions),
+                        iteritems(c2_reactions)):
+                    if cost1 + cost2 < ad_cost3:
+                        logger.warning(
+                            'Invalid admissible cost:'
+                            ' {} -> {} ({}): {}, {} -> {} ({}): {},'
+                            ' {} -> {}: ({})'.format(
+                                c1, c2, r1, cost1, c2, c3, r2, cost2,
+                                c1, c3, ad_cost3))
