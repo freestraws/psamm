@@ -191,12 +191,15 @@ class PathwaysCommand(MetabolicMixin, Command):
         compounds = sorted(model.compounds)
         compound_index = {c: i for i, c in enumerate(compounds)}
 
+        connections = {}
+        for compound in compounds:
+            for other, _ in connector.iter_all(compound):
+                connections.setdefault(other, set()).add(compound)
+
         f.write('\t'.join(str(c) for c in compounds) + '\n')
         for compound in compounds:
-            values = [0 for c in compounds]
-            for other, _ in connector.iter_all(compound):
-                values[compound_index[other]] = 1
-
+            values = (int(c in connections.get(compound, set()))
+                      for c in compounds)
             f.write('{}\t{}\n'.format(
                 compound, '\t'.join(str(x) for x in values)))
 
