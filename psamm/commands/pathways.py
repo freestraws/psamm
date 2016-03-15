@@ -15,6 +15,8 @@
 #
 # Copyright 2015  Jon Lund Steffensen <jon_steffensen@uri.edu>
 
+import math
+import csv
 import logging
 from itertools import product
 from collections import defaultdict
@@ -33,6 +35,22 @@ _COMPOUND_COLOR = '#b3cde3'
 _ACTIVE_COLOR = '#fbb4ae'
 
 
+def gv_props(d):
+    return ','.join('{}="{}"'.format(k, v) for k, v in iteritems(d))
+
+
+def path_use_values(paths):
+    values = {}
+    for pathway in paths:
+        prev_compound, _, _ = pathway[0]
+        for compound, reaction, cost in pathway[1:]:
+            for edge in ((reaction[0], prev_compound),
+                         (compound, reaction[0])):
+                if edge not in values:
+                    values[edge] = 0
+                values[edge] += 1
+
+
 class PathwaysCommand(MetabolicMixin, Command):
     """Find shortest paths between two compounds."""
 
@@ -46,18 +64,46 @@ class PathwaysCommand(MetabolicMixin, Command):
             action='append', default=None, help='Destination compound')
         parser.add_argument('-n', type=int, default=None,
                             help='Number of pathways to find')
+        parser.add_argument(
+            '--edge-values', type=str, default=None, help='Values for edges')
         super(PathwaysCommand, cls).init_parser(parser)
 
     def run(self):
         biomass_reaction = self._model.get_biomass_reaction()
-
-        if self._model.has_model_definition():
-            subset = set(self._model.parse_model())
-        else:
-            subset = set(r.id for r in self._model.parse_reactions())
+        subset = set(self._mm.reactions)
 
         if biomass_reaction is not None:
             subset.discard(biomass_reaction)
+
+        edge_values = None
+        if self._args.edge_values is not None:
+            raw_values = {}
+            with open(self._args.edge_values, 'r') as f:
+                for row in csv.reader(f, delimiter='\t'):
+                    raw_values[row[0]] = float(row[1])
+
+            edge_values = {}
+            for reaction in self._mm.reactions:
+                rx = self._mm.get_reaction(reaction)
+                if reaction in raw_values:
+                    flux = raw_values[reaction]
+                    if abs(flux) < 1e-9:
+                        continue
+
+                    if flux > 0:
+                        for compound, value in rx.right:
+                            edge_values[reaction, compound] = (
+                                flux * float(value))
+                        for compound, value in rx.left:
+                            edge_values[compound, reaction] = (
+                                flux * float(value))
+                    else:
+                        for compound, value in rx.left:
+                            edge_values[reaction, compound] = (
+                                -flux * float(value))
+                        for compound, value in rx.right:
+                            edge_values[compound, reaction] = (
+                                -flux * float(value))
 
         #cost_func = pathways.FormulaCostFunction(self._model)
         cost_func = pathways.JaccardCostFunction(self._model)
@@ -66,6 +112,9 @@ class PathwaysCommand(MetabolicMixin, Command):
         # cost_func = pathways.ConnectivityCostFunction(self._mm)
         #connector = pathways.Connector(self._model, cost_func, disconnect)
         connector = pathways.RpairConnector(self._model, subset, cost_func)
+
+        for edge, value in sorted(iteritems(edge_values)):
+            logger.info('EDGE {}: {}'.format(edge, value))
 
         with open('reactions.tsv', 'w') as f:
             self.write_reaction_matrix(f, self._mm)
@@ -77,10 +126,13 @@ class PathwaysCommand(MetabolicMixin, Command):
             self.write_connector_compounds_matrix(f, self._mm, connector)
 
         with open('connector.dot', 'w') as f:
-            self.write_connector_graph(f, connector)
+            self.write_connector_graph(
+                f, connector, self._mm, biomass_reaction, edge_values)
 
         with open('reactions.dot', 'w') as f:
-            self.write_reaction_graph(f, self._mm, subset)
+            self.write_reaction_graph(
+                f, self._mm, self._mm.reactions, edge_values)
+        return
 
         if self._args.source is not None:
             sources = set(self._args.source)
@@ -114,12 +166,15 @@ class PathwaysCommand(MetabolicMixin, Command):
             logger.info('Found {} paths'.format(len(paths)))
 
             if len(paths) > 0:
+                if edge_values is None:
+                    edge_values = path_use_values(paths)
+
                 with open('{}_{}.tsv'.format(source, dest), 'w') as f:
                     for length, cost in stats:
                         f.write('{}\t{}\n'.format(length, cost))
 
                 with open('{}_{}.dot'.format(source, dest), 'w') as f:
-                    self.write_graph(f, paths, source, dest)
+                    self.write_graph(f, paths, source, dest, edge_values)
 
     def write_reaction_matrix(self, f, model):
         compounds = sorted(model.compounds)
@@ -158,12 +213,16 @@ class PathwaysCommand(MetabolicMixin, Command):
             f.write('{}\t{}\n'.format(
                 compound, '\t'.join(str(x) for x in values)))
 
-    def write_reaction_graph(self, f, model, subset):
+    def write_reaction_graph(self, f, model, subset, edge_values):
         f.write('digraph pathways {\n')
 
         for compound in model.compounds:
-            f.write('  "{}" [style=filled,fillcolor="#b3cde3"];\n'.format(
-                compound))
+            f.write('  "{}" [style=filled,fillcolor="{}"];\n'.format(
+                compound, _COMPOUND_COLOR))
+
+        min_edge_value = math.log(min(itervalues(edge_values)))
+        max_edge_value = math.log(max(itervalues(edge_values)))
+        edge_value_span = max_edge_value - min_edge_value
 
         def dir_value(direction):
             if rx.direction == Direction.Forward:
@@ -174,16 +233,56 @@ class PathwaysCommand(MetabolicMixin, Command):
 
         for reaction in model.reactions:
             if reaction not in subset:
+                logger.info('Skip {}'.format(reaction))
                 continue
             rx = model.get_reaction(reaction)
-            f.write('  "{}" [shape=box,style=filled,'
-                    'fillcolor="#ccebc5"];\n'.format(reaction))
+
+            color = _REACTION_COLOR
+            if model.is_exchange(reaction):
+                color = _ACTIVE_COLOR
+
+            reaction_props = {
+                'shape': 'box',
+                'style': 'filled',
+                'fillcolor': color
+            }
+            f.write('  "{}"[{}];\n'.format(reaction, gv_props(reaction_props)))
+
+            props = {'dir': dir_value(rx.direction)}
+
+            def pen_width(value):
+                return (9 * (math.log(value) - min_edge_value) /
+                        edge_value_span) + 1
+
+            def final_props(edge1, edge2):
+                if edge_values is not None:
+                    p = {}
+                    if edge1 in edge_values:
+                        p['dir'] = 'forward'
+                        p['penwidth'] = pen_width(edge_values[edge1])
+                    elif edge2 in edge_values:
+                        p['dir'] = 'back'
+                        p['penwidth'] = pen_width(edge_values[edge2])
+                    else:
+                        p['style'] = 'dotted'
+                        p['dir'] = dir_value(rx.direction)
+                else:
+                    p = props
+                return p
+
             for c, _ in rx.left:
-                f.write('  "{}" -> "{}" [dir={}];\n'.format(
-                    c, reaction, dir_value(rx.direction)))
+                edge1 = c, reaction
+                edge2 = reaction, c
+
+                f.write('  "{}" -> "{}"[{}];\n'.format(
+                    c, reaction, gv_props(final_props(edge1, edge2))))
+
             for c, _ in rx.right:
-                f.write('  "{}" -> "{}" [dir={}];\n'.format(
-                    reaction, c, dir_value(rx.direction)))
+                edge1 = reaction, c
+                edge2 = c, reaction
+
+                f.write('  "{}" -> "{}"[{}];\n'.format(
+                    reaction, c, gv_props(final_props(edge1, edge2))))
 
         f.write('}\n')
 
@@ -203,7 +302,7 @@ class PathwaysCommand(MetabolicMixin, Command):
             f.write('{}\t{}\n'.format(
                 compound, '\t'.join(str(x) for x in values)))
 
-    def write_connector_graph(self, f, connector):
+    def write_connector_graph(self, f, connector, model, biomass, edge_values):
         f.write('digraph pathways {\n')
 
         def ids(prefix):
@@ -217,7 +316,7 @@ class PathwaysCommand(MetabolicMixin, Command):
         compound_set = set()
         compound_reaction = {}
         reaction_compound = {}
-        reaction_labels = {}
+        reaction_props = {}
         for compound in connector.compounds():
             compound_set.add(compound)
             for other, reactions in connector.iter_all(compound):
@@ -249,7 +348,7 @@ class PathwaysCommand(MetabolicMixin, Command):
                                 reaction_compound[rid].add(c)
                                 logger.info('Moving {} to {}'.format(c, rid))
                             del reaction_compound[other_rid]
-                            del reaction_labels[other_rid]
+                            del reaction_props[other_rid]
                     elif key1 in compound_reaction:
                         rid = compound_reaction[key1]
                         compound_reaction[key2] = rid
@@ -261,7 +360,14 @@ class PathwaysCommand(MetabolicMixin, Command):
                         reaction_compound[rid].add(compound)
                         logger.info('Putting {} in {}'.format(compound, rid))
 
-                    reaction_labels[rid] = reaction
+                    reaction_props[rid] = {
+                        'label': reaction,
+                        'fillcolor': _REACTION_COLOR
+                    }
+
+        min_edge_value = math.log(min(itervalues(edge_values)))
+        max_edge_value = math.log(max(itervalues(edge_values)))
+        edge_value_span = max_edge_value - min_edge_value
 
         inbound_reaction = {}
         outbound_reaction = {}
@@ -271,39 +377,89 @@ class PathwaysCommand(MetabolicMixin, Command):
                     if cost is None:
                         continue
 
-                    pen_width = 3 * (1 - cost)
                     reaction_id = compound_reaction[compound, reaction]
 
                     key = other, reaction_id
                     if key not in inbound_reaction:
                         inbound_reaction[key] = 0
-                    inbound_reaction[key] += pen_width
+                    inbound_reaction[key] += edge_values.get(
+                        (other, reaction), 0)
 
                     key = reaction_id, compound
                     if key not in outbound_reaction:
                         outbound_reaction[key] = 0
-                    outbound_reaction[key] += pen_width
+                    outbound_reaction[key] += edge_values.get(
+                        (reaction, compound), 0)
 
-        for (compound, reaction), pen_width in iteritems(inbound_reaction):
-            f.write('  "{}" -> "{}" [penwidth={}];\n'.format(
-                compound, reaction, pen_width))
+        for reaction in model.reactions:
+            if not model.is_exchange(reaction):
+                continue
 
-        for (reaction, compound), pen_width in iteritems(outbound_reaction):
-            f.write('  "{}" -> "{}" [penwidth={}];\n'.format(
-                reaction, compound, pen_width))
+            rx = model.get_reaction(reaction)
+            for c, _ in rx.compounds:
+                reaction_id = next(reaction_ids)
+                reaction_props[reaction_id] = {
+                    'label': reaction,
+                    'fillcolor': _ACTIVE_COLOR
+                }
+
+                inbound_reaction[c, reaction_id] = edge_values.get(
+                    (c, reaction), 0)
+                outbound_reaction[reaction_id, c] = edge_values.get(
+                    (reaction, c), 0)
+
+        if biomass is not None:
+            rx = model.get_reaction(biomass)
+            for c, value in rx.compounds:
+                reaction_id = next(reaction_ids)
+                reaction_props[reaction_id] = {
+                    'label': biomass,
+                    'fillcolor': _ACTIVE_COLOR
+                }
+
+                if value < 0:
+                    inbound_reaction[c, reaction_id] = edge_values.get(
+                        (c, biomass), 0)
+                else:
+                    outbound_reaction[reaction_id, c] = edge_values.get(
+                        (biomass, c), 0)
+
+        def edge_props(flux):
+            props = {}
+            if flux == 0:
+                props['style'] = 'dotted'
+            else:
+                props['penwidth'] = (
+                    9 * ((math.log(flux) - min_edge_value) /
+                         edge_value_span) + 1)
+            return props
+
+        for (compound, reaction), flux in iteritems(inbound_reaction):
+            f.write('  "{}" -> "{}"[{}];\n'.format(
+                compound, reaction, gv_props(edge_props(flux))))
+
+        for (reaction, compound), flux in iteritems(outbound_reaction):
+            f.write('  "{}" -> "{}"[{}];\n'.format(
+                reaction, compound, gv_props(edge_props(flux))))
 
         for compound in compound_set:
-            f.write('  "{}" [style=filled,fillcolor="{}"];\n'.format(
-                compound, _COMPOUND_COLOR))
+            p = {
+                'style': 'filled',
+                'fillcolor': _COMPOUND_COLOR
+            }
+            f.write('  "{}"[{}];\n'.format(compound, gv_props(p)))
 
-        for reaction, label in iteritems(reaction_labels):
-            f.write('  "{}" [shape=box,label="{}",style=filled,'
-                    'fillcolor="{}"];\n'.format(
-                        reaction, label, _REACTION_COLOR))
+        for reaction, props in iteritems(reaction_props):
+            p = {
+                'shape': 'box',
+                'style': 'filled',
+            }
+            p.update(props)
+            f.write('  "{}"[{}];\n'.format(reaction, gv_props(p)))
 
         f.write('}\n')
 
-    def write_graph(self, f, paths, source, dest):
+    def write_graph(self, f, paths, source, dest, edge_values):
         if len(paths) == 0:
             return
 
@@ -339,12 +495,12 @@ class PathwaysCommand(MetabolicMixin, Command):
 
         for compound in node_compounds:
             compound_props[compound]['style'] = 'filled'
-            compound_props[compound]['fillcolor'] = '"' + _COMPOUND_COLOR + '"'
+            compound_props[compound]['fillcolor'] = _COMPOUND_COLOR
 
         for reaction, direction in node_reactions:
             reaction_props[reaction]['shape'] = 'box'
             reaction_props[reaction]['style'] = 'filled'
-            reaction_props[reaction]['fillcolor'] = '"' + _REACTION_COLOR + '"'
+            reaction_props[reaction]['fillcolor'] = _REACTION_COLOR
 
         for edge in edges:
             use_count = edge_use_count[edge]
@@ -357,15 +513,14 @@ class PathwaysCommand(MetabolicMixin, Command):
         step = (height - 2*margin) / len(paths[0])
         prev_compound = None
         for i, (compound, reaction, _) in enumerate(paths[0]):
-            compound_props[compound]['color'] = '"' + _ACTIVE_COLOR + '"'
-            compound_props[compound]['pos'] = '"{},{}!"'.format(
+            compound_props[compound]['color'] = _ACTIVE_COLOR
+            compound_props[compound]['pos'] = '{},{}!'.format(
                 width / 2, margin + i*step)
 
             if reaction is not None:
                 r, d = reaction
-                edge_props[compound, r]['color'] = '"' + _ACTIVE_COLOR + '"'
-                edge_props[r, prev_compound]['color'] = (
-                    '"' + _ACTIVE_COLOR + '"')
+                edge_props[compound, r]['color'] = _ACTIVE_COLOR
+                edge_props[r, prev_compound]['color'] = _ACTIVE_COLOR
 
             prev_compound = compound
 
@@ -376,23 +531,17 @@ class PathwaysCommand(MetabolicMixin, Command):
         for reaction, direction in node_reactions:
             if reaction in reaction_props:
                 props = reaction_props[reaction]
-                f.write('  "{}" [{}];\n'.format(
-                    reaction, ','.join('{}={}'.format(k, v)
-                                       for k, v in iteritems(props))))
+                f.write('  "{}" [{}];\n'.format(reaction, gv_props(props)))
 
         for compound in node_compounds:
             if compound in compound_props:
                 props = compound_props[compound]
-                f.write('  "{}" [{}];\n'.format(
-                    compound, ','.join('{}={}'.format(k, v)
-                                       for k, v in iteritems(props))))
+                f.write('  "{}" [{}];\n'.format(compound, gv_props(props)))
 
         for (source, dest) in edges:
             props = edge_props.get((source, dest), {})
             if len(props) > 0:
-                prop_string = ' [{}]'.format(
-                    ','.join('{}={}'.format(k, v)
-                             for k, v in iteritems(props)))
+                prop_string = ' [{}]'.format(gv_props(props))
             else:
                 prop_string = ''
             f.write('  "{}" -> "{}"{};\n'.format(
