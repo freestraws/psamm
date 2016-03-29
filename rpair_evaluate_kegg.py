@@ -53,6 +53,8 @@ if __name__ == '__main__':
     skipped_empty_rpairs = 0
     matched, mismatched, missing = 0, 0, 0
     reaction_count = 0
+    reaction_matched = 0
+    main_actual_pairs = 0
     with open(sys.argv[2], 'r') as f:
         for entry in kegg.parse_reaction_file(f):
             if entry.equation is None:
@@ -113,6 +115,8 @@ if __name__ == '__main__':
             for rpair in entry.rpairs:
                 _, transfer_names, rp_type = rpair
                 actual[transfer_names] = rp_type
+                if rp_type == 'main':
+                    main_actual_pairs += 1
 
             entry_matched, entry_mismatched, entry_missing = 0, 0, 0
             for pair, rp_type in iteritems(predicted):
@@ -152,8 +156,12 @@ if __name__ == '__main__':
             missing += entry_missing
 
             reaction_count += 1
+            if entry_mismatched == 0 and entry_missing == 0:
+                reaction_matched += 1
 
-    logger.info('Reactions: {}'.format(reaction_count))
+    logger.info('Reactions: {} (matched: {})'.format(
+        reaction_count, reaction_matched))
+    logger.info('Total main reaction pairs: {}'.format(main_actual_pairs))
     logger.info('Skipped: {} (non-integer), {} (unknown formula),'
                 ' {} (unbalanced), {} (empty rpairs)'.format(
         skipped_non_integer, skipped_unknown_formula, skipped_unbalanced,
