@@ -421,8 +421,9 @@ class PathwaysCommand(MetabolicMixin, Command):
                     inbound_reaction[c, reaction_id] = edge_values.get(
                         (c, biomass), 0)
                 else:
-                    outbound_reaction[reaction_id, c] = edge_values.get(
-                        (biomass, c), 0)
+                    #outbound_reaction[reaction_id, c] = edge_values.get(
+                    #    (biomass, c), 0)
+                    pass
 
         def edge_props(flux):
             props = {}
