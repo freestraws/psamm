@@ -98,10 +98,15 @@ class _CompoundInstance(object):
 def predict_rpair(reaction, compound_formula):
     """Predict reaction pairs."""
 
-    for _, value in reaction.compounds:
+    for compound, value in reaction.compounds:
         if not isinstance(value, int):
             logger.warning('Reaction pairs are not available for non-integer'
                            ' reaction {}'.format(reaction))
+            return {}, {}
+
+        if not compound.name in compound_formula:
+            logger.warning('Reaction pairs are not available when formula'
+                           ' is missing: {}, {}'.format(reaction, compound))
             return {}, {}
 
     uninstantiated_left = dict(reaction.left)
