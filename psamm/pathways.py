@@ -51,7 +51,8 @@ def shared_elements(f1, f2):
 def model_compound_formulas(model):
     formulas = {}
     for compound in model.parse_compounds():
-        formulas[compound.id] = Formula.parse(compound.formula)
+        if compound.formula is not None:
+            formulas[compound.id] = Formula.parse(compound.formula)
     return formulas
 
 
