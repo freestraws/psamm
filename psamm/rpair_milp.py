@@ -36,7 +36,7 @@ def predict_rpair(reaction, compound_formula, solver):
                            ' is missing: {}, {}'.format(reaction, compound))
             return {}, {}
 
-        f = compound_formula[compound.name]
+        f = compound_formula[compound.name].flattened()
         elements.update(e for e, _, _ in _weighted_formula(f))
 
     p = solver.create_problem()
@@ -51,9 +51,6 @@ def predict_rpair(reaction, compound_formula, solver):
         objective += (100 * p.var(('m', c1, c2)) +
                       90 * p.var(('q', c1, c2)) +
                       -0.1 * p.var(('omega', c1, c2)))
-
-        f1 = compound_formula[c1.name]
-        f2 = compound_formula[c2.name]
 
         p.define(*(('gamma', c1, c2, e) for e in elements),
                  types=lp.VariableType.Binary)
@@ -79,9 +76,10 @@ def predict_rpair(reaction, compound_formula, solver):
     # Eq 3
     zs = {}
     for c1, v in reaction.left:
-        f = dict(compound_formula[c1.name].items())
+        f = compound_formula[c1.name].flattened()
+        fd = dict(f.items())
         for e in elements:
-            mf = f.get(e, 0)
+            mf = fd.get(e, 0)
             delta_sum = 0
             for c2, _ in reaction.right:
                 delta_sum += p.var(('delta', c1, c2, e))
@@ -97,17 +95,18 @@ def predict_rpair(reaction, compound_formula, solver):
 
         # Eq 13
         zs[c1] = 0
-        for e, mf, w in _weighted_formula(compound_formula[c1.name]):
+        for e, mf, w in _weighted_formula(f):
             zs[c1] += w * mf
 
     # Eq 2
     for c2, v in reaction.right:
-        f = dict(compound_formula[c2.name].items())
+        f = compound_formula[c2.name].flattened()
+        fd = dict(f.items())
         for e in elements:
-            mf = f.get(e, 0)
+            mf = fd.get(e, 0)
             delta_sum = 0
             for c1, _ in reaction.left:
-                if e in compound_formula[c1.name]:
+                if e in f:
                     delta_sum += p.var(('delta', c1, c2, e))
             try:
                 p.add_linear_constraints(delta_sum == v * mf)
@@ -116,8 +115,8 @@ def predict_rpair(reaction, compound_formula, solver):
 
     for c1, v1 in reaction.left:
         for c2, _ in reaction.right:
-            f1 = dict(compound_formula[c1.name].items())
-            f2 = dict(compound_formula[c2.name].items())
+            f1 = dict(compound_formula[c1.name].flattened().items())
+            f2 = dict(compound_formula[c2.name].flattened().items())
             for e in elements:
                 mf = f1.get(e, 0)
 
@@ -146,9 +145,6 @@ def predict_rpair(reaction, compound_formula, solver):
     transfer = {}
     for c1, c2 in product((c for c, _ in reaction.left),
                           (c for c, _ in reaction.right)):
-        f1 = compound_formula[c1.name]
-        f2 = compound_formula[c2.name]
-
         items = {}
         for e in elements:
             v = result.get_value(('delta', c1, c2, e))
