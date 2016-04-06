@@ -76,6 +76,16 @@ def formula_remove(f1, f2):
     return Formula(new)
 
 
+def compounds_to_dict(it):
+    """Convert an iterator of compound, value-pairs to a dictionary."""
+    d = {}
+    for compound, value in it:
+        if compound not in d:
+            d[compound] = 0
+        d[compound] += value
+    return d
+
+
 class _CompoundInstance(object):
     def __init__(self, compound, n, formula):
         self.compound = compound
@@ -109,8 +119,8 @@ def predict_rpair(reaction, compound_formula):
                            ' is missing: {}, {}'.format(reaction, compound))
             return {}, {}
 
-    uninstantiated_left = dict(reaction.left)
-    uninstantiated_right = dict(reaction.right)
+    uninstantiated_left = compounds_to_dict(reaction.left)
+    uninstantiated_right = compounds_to_dict(reaction.right)
 
     def compound_instances(uninstantiated):
         instances = []
