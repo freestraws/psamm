@@ -106,8 +106,7 @@ def predict_rpair(reaction, compound_formula, solver):
             mf = fd.get(e, 0)
             delta_sum = 0
             for c1, _ in reaction.left:
-                if e in f:
-                    delta_sum += p.var(('delta', c1, c2, e))
+                delta_sum += p.var(('delta', c1, c2, e))
             try:
                 p.add_linear_constraints(delta_sum == v * mf)
             except ValueError:
