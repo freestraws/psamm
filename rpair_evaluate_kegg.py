@@ -167,14 +167,14 @@ if __name__ == '__main__':
             entry_tp, entry_fp, entry_fn = 0, 0, 0
             for pair, rp_type in iteritems(predicted):
                 if pair in actual:
-                        entry_tp += 1
+                    entry_tp += 1
                 else:
-                        entry_fp += 1
-                        print('{}: {} ({}): {} not in KEGG'.format(
-                            entry.id, entry.name, entry.definition,
-                            tuple(compound_name[x] for x in pair)))
+                    entry_fp += 1
+                    print('{}: {} ({}): {} not in KEGG'.format(
+                        entry.id, entry.name, entry.definition,
+                        tuple(compound_name[x] for x in pair)))
             for pair, rp_type in iteritems(actual):
-                if pair not in actual:
+                if pair not in predicted:
                     entry_fn += 1
                     print('{}: {} ({}): {} not predicted'.format(
                         entry.id, entry.name, entry.definition,
