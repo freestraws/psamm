@@ -61,9 +61,10 @@ if __name__ == '__main__':
 
     skipped_non_integer = 0
     skipped_unknown_formula = 0
-    skipped_unbalanced = 0
     skipped_empty_rpairs = 0
     skipped_invalid_rpairs = 0
+
+    unbalanced_reactions = set()
 
     tp, fp, fn = 0, 0, 0
     reaction_count = 0
@@ -121,7 +122,7 @@ if __name__ == '__main__':
                            in iteritems(balance)):
                         logger.info('Skipping unbalanced equation!')
                         logger.info('Balance: {}'.format(balance))
-                        skipped_unbalanced += 1
+                        unbalanced_reactions.add(entry.id)
                         continue
                     else:
                         logger.info('Ignoring unbalanced H in equation...')
@@ -139,7 +140,7 @@ if __name__ == '__main__':
                         reaction, compound_formula, solver)
                 except rpair_milp.UnbalancedReactionError:
                     logger.info('Skipping unbalanced equation!')
-                    skipped_unbalanced += 1
+                    unbalanced_reactions.add(entry.id)
                     continue
 
             predicted = {}
@@ -158,10 +159,10 @@ if __name__ == '__main__':
                     predicted[transfer_names] = rp_type
 
             actual = {}
-            for rpair in entry.rpairs:
-                _, transfer_names, _ = rpair
+            for rpair in entry_rpairs:
+                _, transfer_names, rp_type = rpair
                 if transfer_names not in actual:
-                    actual[transfer_names] = 'main'
+                    actual[transfer_names] = rp_type
                     kegg_pairs += 1
 
             entry_tp, entry_fp, entry_fn = 0, 0, 0
@@ -199,14 +200,16 @@ if __name__ == '__main__':
             fp += entry_fp
             fn += entry_fn
 
-    logger.info('Compounds: {}, (not parsed: {})'.format(
-        len(compound_formula), compound_not_parsed))
-    logger.info('Reactions: {} (matched: {})'.format(
-        reaction_count, reaction_matched))
-    logger.info('Total KEGG reaction pairs: {}'.format(kegg_pairs))
     logger.info(
-        'Skipped: {} (non-integer), {} (unknown formula), {} (unbalanced),'
-        ' {} (empty rpairs), {} (invalid pairs)'.format(
-            skipped_non_integer, skipped_unknown_formula, skipped_unbalanced,
-            skipped_empty_rpairs, skipped_invalid_rpairs))
+        'Compounds: {}, (skipped: unable to parse: {}; variable: {})'.format(
+            len(compound_formula), compound_not_parsed, compound_is_variable))
+    logger.info(
+        'Reactions: {}, (skipped: non-integer stoichiometry: {};'
+        ' unknown formula: {}; unbalanced reaction: {};'
+        ' missing rpair annotation: {}; missing rpairs: {})'.format(
+            reaction_count, skipped_non_integer, skipped_unknown_formula,
+            len(unbalanced_reactions), skipped_empty_rpairs,
+            skipped_invalid_rpairs))
+    logger.info('Reactions perfectly matched: {}'.format(reaction_matched))
+    logger.info('Total KEGG reaction pairs: {}'.format(kegg_pairs))
     logger.info('TP: {}, FP: {}, FN: {}'.format(tp, fp, fn))
