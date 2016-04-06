@@ -39,6 +39,7 @@ if __name__ == '__main__':
     compound_formula = {}
     compound_name = {}
     compound_not_parsed = 0
+    compound_is_variable = 0
     with open(os.path.join(kegg_dir, 'compound', 'compound'), 'r') as f:
         for entry in kegg.parse_compound_file(f):
             compound_name[entry.id] = entry.name
@@ -51,6 +52,7 @@ if __name__ == '__main__':
                     compound_not_parsed += 1
                 else:
                     if form.is_variable():
+                        compound_is_variable += 1
                         continue
                     compound_formula[entry.id] = form
 
