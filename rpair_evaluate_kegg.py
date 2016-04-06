@@ -100,7 +100,8 @@ if __name__ == '__main__':
             for _, transfer_names, _ in entry_rpairs:
                 rpair_compounds.update(transfer_names)
             for c, _ in reaction.compounds:
-                if c.name not in rpair_compounds:
+                if (c.name not in rpair_compounds and
+                        Atom('C') in compound_formula[c.name]):
                     invalid_compounds.add(c)
 
             if len(invalid_compounds) > 0:
