@@ -23,6 +23,31 @@ def formula_is_only_h(form):
     return len(form_dict) == 1 and Atom('H') in form_dict
 
 
+def validate_rpairs(reaction, rpairs, compound_formula):
+    """Validate that rpairs are sufficient to transfer all carbon."""
+
+    all_pairs = set()
+    for (c1, c2) in rpairs:
+        all_pairs.add((c1, c2))
+        all_pairs.add((c2, c1))
+
+    invalid = set()
+    for c1, v1 in reaction.compounds:
+        f1 = dict(compound_formula[c1.name].flattened().items())
+        self_c = abs(v1) * f1.get(Atom('C'), 0)
+
+        other_c = 0
+        for c2, v2 in reaction.compounds:
+            if (c1.name, c2.name) in all_pairs:
+                f2 = dict(compound_formula[c2.name].flattened().items())
+                other_c += abs(v2) * f2.get(Atom('C'), 0)
+
+        if self_c > other_c:
+            invalid.add(c1)
+
+    return invalid
+
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
@@ -103,15 +128,9 @@ if __name__ == '__main__':
                 skipped_empty_rpairs += 1
                 continue
 
-            rpair_compounds = set()
-            invalid_compounds = set()
-            for _, transfer_names, _ in entry_rpairs:
-                rpair_compounds.update(transfer_names)
-            for c, _ in reaction.compounds:
-                if (c.name not in rpair_compounds and
-                        Atom('C') in compound_formula[c.name]):
-                    invalid_compounds.add(c)
-
+            invalid_compounds = validate_rpairs(
+                reaction, (pair for _, pair, _ in entry_rpairs),
+                compound_formula)
             if len(invalid_compounds) > 0:
                 logger.info(
                     '{}: Skipping reaction where reaction pair carbon-transfers'
