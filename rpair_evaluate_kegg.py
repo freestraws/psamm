@@ -65,6 +65,8 @@ if __name__ == '__main__':
     skipped_invalid_rpairs = 0
 
     unbalanced_reactions = set()
+    trivial_reaction_count = 0
+    trivial_incorrect = set()
 
     tp, fp, fn = 0, 0, 0
     reaction_count = 0
@@ -111,6 +113,15 @@ if __name__ == '__main__':
                     ' reaction pairs! {}'.format(invalid_compounds))
                 skipped_invalid_rpairs += 1
                 continue
+
+            # Count carbons on either side
+            c_compounds_left, c_compounds_right = 0, 0
+            for c, v in reaction.compounds:
+                if Atom('C') in compound_formula[c.name]:
+                    if v < 0:
+                        c_compounds_left += 1
+                    else:
+                        c_compounds_right += 1
 
             logger.debug(entry.id)
 
@@ -166,6 +177,7 @@ if __name__ == '__main__':
                     kegg_pairs += 1
 
             entry_tp, entry_fp, entry_fn = 0, 0, 0
+            c_pair_incorrect = 0
             for pair, rp_type in iteritems(predicted):
                 if pair in actual:
                     entry_tp += 1
@@ -174,12 +186,18 @@ if __name__ == '__main__':
                     print('{}: {} ({}): {} not in KEGG'.format(
                         entry.id, entry.name, entry.definition,
                         tuple(compound_name[x] for x in pair)))
+
+                    if all(Atom('C') in compound_formula[c] for c in pair):
+                        c_pair_incorrect += 1
             for pair, rp_type in iteritems(actual):
                 if pair not in predicted:
                     entry_fn += 1
                     print('{}: {} ({}): {} not predicted'.format(
                         entry.id, entry.name, entry.definition,
                         tuple(compound_name[x] for x in pair)))
+
+                    if all(Atom('C') in compound_formula[c] for c in pair):
+                        c_pair_incorrect += 1
 
             reaction_count += 1
             false = entry_fp + entry_fn
@@ -196,6 +214,11 @@ if __name__ == '__main__':
             else:
                 reaction_matched += 1
 
+            if c_compounds_left <= 1 or c_compounds_right <= 1:
+                trivial_reaction_count += 1
+                if c_pair_incorrect > 0:
+                    trivial_incorrect.add(entry.id)
+
             tp += entry_tp
             fp += entry_fp
             fn += entry_fn
@@ -211,5 +234,7 @@ if __name__ == '__main__':
             len(unbalanced_reactions), skipped_empty_rpairs,
             skipped_invalid_rpairs))
     logger.info('Reactions perfectly matched: {}'.format(reaction_matched))
+    logger.info('Trivial reactions: {} (incorrect: {})'.format(
+        trivial_reaction_count, len(trivial_incorrect)))
     logger.info('Total KEGG reaction pairs: {}'.format(kegg_pairs))
     logger.info('TP: {}, FP: {}, FN: {}'.format(tp, fp, fn))
