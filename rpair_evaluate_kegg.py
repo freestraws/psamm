@@ -81,20 +81,25 @@ if __name__ == '__main__':
 
             if any(not isinstance(value, integer_types) for _, value
                     in reaction.compounds):
-                logger.info('Non-integer stoichiometry! Skipping reaction...')
+                logger.info(
+                    '{}: Non-integer stoichiometry!'
+                    ' Skipping reaction...'.format(entry.id))
                 skipped_non_integer += 1
                 continue
 
             if any(compound.name not in compound_formula for compound, _
                     in reaction.compounds):
-                logger.info('Unknown formula for reaction compounds!'
-                            ' Skipping reaction...')
+                logger.info(
+                    '{}: Unknown formula for reaction compounds!'
+                    ' Skipping reaction...'.format(entry.id))
                 skipped_unknown_formula += 1
                 continue
 
             entry_rpairs = list(entry.rpairs)
             if len(entry_rpairs) == 0:
-                logger.info('Skipping reaction with no reaction pairs!')
+                logger.info(
+                    '{}: Skipping reaction with no reaction pairs!'.format(
+                        entry.id))
                 skipped_empty_rpairs += 1
                 continue
 
@@ -109,8 +114,8 @@ if __name__ == '__main__':
 
             if len(invalid_compounds) > 0:
                 logger.info(
-                    'Skipping reaction where a carbon-containing has no'
-                    ' reaction pairs! {}'.format(invalid_compounds))
+                    '{}: Skipping reaction where reaction pair carbon-transfers'
+                    ' are invalid! {}'.format(entry.id, invalid_compounds))
                 skipped_invalid_rpairs += 1
                 continue
 
@@ -131,7 +136,8 @@ if __name__ == '__main__':
                 if len(balance) > 0:
                     if any(not formula_is_only_h(form) for _, form
                            in iteritems(balance)):
-                        logger.info('Skipping unbalanced equation!')
+                        logger.info('{}: Skipping unbalanced equation!'.format(
+                            entry.id))
                         logger.info('Balance: {}'.format(balance))
                         unbalanced_reactions.add(entry.id)
                         continue
@@ -150,7 +156,8 @@ if __name__ == '__main__':
                     transfer = rpair_milp.predict_rpair(
                         reaction, compound_formula, solver)
                 except rpair_milp.UnbalancedReactionError:
-                    logger.info('Skipping unbalanced equation!')
+                    logger.info('{}: Skipping unbalanced equation!'.format(
+                        entry.id))
                     unbalanced_reactions.add(entry.id)
                     continue
 
