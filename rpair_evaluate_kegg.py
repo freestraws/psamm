@@ -206,7 +206,7 @@ if __name__ == '__main__':
     logger.info(
         'Reactions: {}, (skipped: non-integer stoichiometry: {};'
         ' unknown formula: {}; unbalanced reaction: {};'
-        ' missing rpair annotation: {}; missing rpairs: {})'.format(
+        ' missing rpair annotation: {}; invalid rpairs: {})'.format(
             reaction_count, skipped_non_integer, skipped_unknown_formula,
             len(unbalanced_reactions), skipped_empty_rpairs,
             skipped_invalid_rpairs))
