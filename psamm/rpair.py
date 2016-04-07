@@ -11,9 +11,10 @@ from six import iteritems
 logger = logging.getLogger(__name__)
 
 
-ATOM_WEIGHT = {
-    Atom('H'): 0.0,
-}
+def _weight(element):
+    if element == Atom('H'):
+        return 0.0
+    return 1.0
 
 
 def shared_elements(f1, f2):
@@ -32,8 +33,9 @@ def shared_elements(f1, f2):
         mx = max(d1.get(element, 0), d2.get(element, 0))
         count += mi
         total += mx
-        w_count += ATOM_WEIGHT.get(element, 1.0) * mi
-        w_total += ATOM_WEIGHT.get(element, 1.0) * mx
+        w = _weight(element)
+        w_count += w * mi
+        w_total += w * mx
 
     score = 0.0 if total == 0.0 else count / float(total)
     w_score = 0.0 if w_total == 0.0 else w_count / float(w_total)
