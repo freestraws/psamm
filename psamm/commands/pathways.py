@@ -66,6 +66,8 @@ class PathwaysCommand(MetabolicMixin, Command):
                             help='Number of pathways to find')
         parser.add_argument(
             '--edge-values', type=str, default=None, help='Values for edges')
+        parser.add_argument(
+            '--clusters', type=str, default=None, help='Reaction clusters')
         super(PathwaysCommand, cls).init_parser(parser)
 
     def run(self):
@@ -105,6 +107,15 @@ class PathwaysCommand(MetabolicMixin, Command):
                             edge_values[compound, reaction] = (
                                 -flux * float(value))
 
+        clusters = {}
+        if self._args.clusters is not None:
+            with open(self._args.clusters, 'r') as f:
+                f.readline()  # skip header
+                for row in csv.reader(f, delimiter='\t'):
+                    reaction_id = row[0]
+                    cluster_id = row[1]
+                    clusters[reaction_id] = cluster_id
+
         #cost_func = pathways.FormulaCostFunction(self._model)
         cost_func = pathways.JaccardCostFunction(self._model)
         #cost_func = pathways.UniformCostFunction()
@@ -127,7 +138,8 @@ class PathwaysCommand(MetabolicMixin, Command):
 
         with open('connector.dot', 'w') as f:
             self.write_connector_graph(
-                f, connector, self._mm, biomass_reaction, edge_values)
+                f, connector, self._mm, biomass_reaction, edge_values,
+                clusters)
 
         with open('reactions.dot', 'w') as f:
             self.write_reaction_graph(
@@ -302,7 +314,8 @@ class PathwaysCommand(MetabolicMixin, Command):
             f.write('{}\t{}\n'.format(
                 compound, '\t'.join(str(x) for x in values)))
 
-    def write_connector_graph(self, f, connector, model, biomass, edge_values):
+    def write_connector_graph(
+            self, f, connector, model, biomass, edge_values, clusters):
         f.write('digraph pathways {\n')
 
         def ids(prefix):
@@ -312,15 +325,14 @@ class PathwaysCommand(MetabolicMixin, Command):
                 i += 1
 
         reaction_ids = ids('r')
+        compound_ids = ids('c')
 
-        compound_set = set()
+        # Split reaction nodes into nodes that do not share compounds.
         compound_reaction = {}
         reaction_compound = {}
         reaction_props = {}
-        for compound in connector.compounds():
-            compound_set.add(compound)
-            for other, reactions in connector.iter_all(compound):
-                compound_set.add(other)
+        for compound in connector.compounds_forward():
+            for other, reactions in connector.iter_all_forward(compound):
                 for (reaction, direction), cost in iteritems(reactions):
                     if cost is None:
                         continue
@@ -369,61 +381,92 @@ class PathwaysCommand(MetabolicMixin, Command):
         max_edge_value = math.log(max(itervalues(edge_values)))
         edge_value_span = max_edge_value - min_edge_value
 
+        # Create dicts of inbound/outbound edges for reactions.
+        compound_props = {}
+        compound_id_map = {}
         inbound_reaction = {}
         outbound_reaction = {}
-        for compound in connector.compounds():
-            for other, reactions in connector.iter_all(compound):
+        for compound in connector.compounds_forward():
+            compound_connected = False
+            for other, reactions in connector.iter_all_forward(compound):
                 for (reaction, direction), cost in iteritems(reactions):
                     if cost is None:
                         continue
 
-                    reaction_id = compound_reaction[compound, reaction]
+                    cluster = clusters.get(reaction)
 
-                    key = other, reaction_id
+                    # Create compound nodes for cluster
+                    if (compound, cluster) not in compound_id_map:
+                        logger.info('Creating {}, {}'.format(compound, cluster))
+                        compound_id = next(compound_ids)
+                        compound_id_map[compound, cluster] = compound_id
+                        compound_props[compound_id] = {
+                            'label': str(compound),
+                            'fillcolor': _COMPOUND_COLOR
+                        }
+                    else:
+                        compound_id = compound_id_map[compound, cluster]
+
+                    if (other, cluster) not in compound_id_map:
+                        logger.info('Creating {}, {}'.format(other, cluster))
+                        other_id = next(compound_ids)
+                        compound_id_map[other, cluster] = other_id
+                        compound_props[other_id] = {
+                            'label': str(other),
+                            'fillcolor': _COMPOUND_COLOR
+                        }
+                    else:
+                        other_id = compound_id_map[other, cluster]
+
+                    # Create inbound/outbound connections
+                    key = other_id, compound_reaction[other, reaction]
                     if key not in inbound_reaction:
                         inbound_reaction[key] = 0
                     inbound_reaction[key] += edge_values.get(
                         (other, reaction), 0)
 
-                    key = reaction_id, compound
+                    key = compound_reaction[compound, reaction], compound_id
                     if key not in outbound_reaction:
                         outbound_reaction[key] = 0
                     outbound_reaction[key] += edge_values.get(
                         (reaction, compound), 0)
 
+        # Add exchange reaction nodes to graph
         for reaction in model.reactions:
             if not model.is_exchange(reaction):
                 continue
 
+            cluster = clusters.get(reaction)
             rx = model.get_reaction(reaction)
             for c, _ in rx.compounds:
-                reaction_id = next(reaction_ids)
-                reaction_props[reaction_id] = {
-                    'label': reaction,
-                    'fillcolor': _ACTIVE_COLOR
-                }
+                if (c, cluster) in compound_id_map:
+                    reaction_id = next(reaction_ids)
+                    reaction_props[reaction_id] = {
+                        'label': reaction,
+                        'fillcolor': _ACTIVE_COLOR
+                    }
 
-                inbound_reaction[c, reaction_id] = edge_values.get(
-                    (c, reaction), 0)
-                outbound_reaction[reaction_id, c] = edge_values.get(
-                    (reaction, c), 0)
+                    compound_id = compound_id_map[c, cluster]
+                    inbound_reaction[compound_id, reaction_id] = (
+                        edge_values.get((c, reaction), 0))
+                    outbound_reaction[reaction_id, compound_id] = (
+                        edge_values.get((reaction, c), 0))
 
+        # Add biomass reaction node to graph
         if biomass is not None:
+            cluster = clusters.get(biomass)
             rx = model.get_reaction(biomass)
-            for c, value in rx.compounds:
-                reaction_id = next(reaction_ids)
-                reaction_props[reaction_id] = {
-                    'label': biomass,
-                    'fillcolor': _ACTIVE_COLOR
-                }
+            for c, _ in rx.left:
+                if (c, cluster) in compound_id_map:
+                    reaction_id = next(reaction_ids)
+                    reaction_props[reaction_id] = {
+                        'label': biomass,
+                        'fillcolor': _ACTIVE_COLOR
+                    }
 
-                if value < 0:
-                    inbound_reaction[c, reaction_id] = edge_values.get(
-                        (c, biomass), 0)
-                else:
-                    #outbound_reaction[reaction_id, c] = edge_values.get(
-                    #    (biomass, c), 0)
-                    pass
+                    compound_id = compound_id_map[c, cluster]
+                    inbound_reaction[compound_id, reaction_id] = (
+                        edge_values.get((c, biomass), 0))
 
         def edge_props(flux):
             props = {}
@@ -443,11 +486,11 @@ class PathwaysCommand(MetabolicMixin, Command):
             f.write('  "{}" -> "{}"[{}];\n'.format(
                 reaction, compound, gv_props(edge_props(flux))))
 
-        for compound in compound_set:
+        for compound, props in iteritems(compound_props):
             p = {
                 'style': 'filled',
-                'fillcolor': _COMPOUND_COLOR
             }
+            p.update(props)
             f.write('  "{}"[{}];\n'.format(compound, gv_props(p)))
 
         for reaction, props in iteritems(reaction_props):
