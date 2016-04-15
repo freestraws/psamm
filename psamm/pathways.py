@@ -166,7 +166,8 @@ class Connector(object):
     def __init__(self, model, subset):
         self._model = model
         self._subset = subset
-        self._connections = {}
+        self._forward = {}  # Map reactants to products
+        self._connections = {}  # Reverse connections
         self._cache_pairs()
 
     def _cache_pairs(self):
@@ -190,6 +191,9 @@ class Connector(object):
                             reactions = known_reactants.setdefault(
                                 reactant, {})
                             reactions[reaction.id, Direction.Forward] = entry
+                            self._forward.setdefault(
+                                reactant, {}).setdefault(metabolite, {})[
+                                    reaction.id, Direction.Forward] = entry
             if rx.direction.reverse:
                 for metabolite, _ in rx.left:
                     known_reactants = self._connections.setdefault(
@@ -205,12 +209,21 @@ class Connector(object):
                             reactions = known_reactants.setdefault(
                                 reactant, {})
                             reactions[reaction.id, Direction.Reverse] = entry
+                            self._forward.setdefault(
+                                reactant, {}).setdefault(metabolite, {})[
+                                    reaction.id, Direction.Forward] = entry
 
     def compounds(self):
         return iter(self._connections)
 
+    def compounds_forward(self):
+        return iter(self._forward)
+
     def iter_all(self, compound):
         return iteritems(self._connections.get(compound, {}))
+
+    def iter_all_forward(self, compound):
+        return iteritems(self._forward.get(compound, {}))
 
     def has(self, c1, c2):
         return c1 in self._connections and c2 in self._connections[c1]
