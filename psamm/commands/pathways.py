@@ -19,12 +19,13 @@ import math
 import csv
 import logging
 from itertools import product
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 from ..command import Command, MetabolicMixin, CommandError
 from ..reaction import Compound, Direction
 from .. import pathways
 from ..datasource.reaction import parse_compound
+from ..heap import Heap
 
 from six import iteritems, itervalues
 
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 _REACTION_COLOR = '#ccebc5'
 _COMPOUND_COLOR = '#b3cde3'
 _ACTIVE_COLOR = '#fbb4ae'
+_ALT_COLOR = '#ccb460'
 
 
 def gv_props(d):
@@ -49,6 +51,102 @@ def path_use_values(paths):
                 if edge not in values:
                     values[edge] = 0
                 values[edge] += 1
+
+
+def reaction_centrality(connector, breaks):
+    """Calculate reaction centrality."""
+    centrality = Counter()
+    for initial in connector.compounds_forward():
+        # Dijkstra
+        prev_node = {initial: []}
+        dist = {initial: 0}
+        open_nodes = Heap([initial], key=lambda x: dist[x])
+        closed_nodes = set()
+
+        while len(open_nodes) > 0:
+            current = open_nodes.pop()
+            if current not in dist:
+                break
+
+            closed_nodes.add(current)
+
+            for other, reactions in connector.iter_all_forward(current):
+                cpair = tuple(sorted([current, other]))
+                if other in closed_nodes:
+                    continue
+
+                reaction_set = set()
+                for (reaction, direction), cost in iteritems(reactions):
+                    if cost is None or (reaction, cpair) in breaks:
+                        continue
+                    reaction_set.add((reaction, cpair))
+
+                if len(reaction_set) == 0:
+                    continue
+
+                alt_dist = dist[current] + cost
+                if other not in dist or alt_dist < dist[other]:
+                    dist[other] = alt_dist
+                    if other not in open_nodes:
+                        open_nodes.push(other)
+                    else:
+                        open_nodes.update(other)
+                    prev_node[other] = [(current, reaction_set)]
+                elif other in dist and alt_dist == dist[other]:
+                    prev_node[other].append((current, reaction_set))
+
+        for compound, d in sorted(iteritems(dist), key=lambda x: x[1]):
+            if compound != initial:
+                open_nodes = [(compound, [])]
+                path_count = 0
+                reaction_value = Counter()
+                while len(open_nodes) > 0:
+                    c, path = open_nodes.pop()
+                    if c != initial:
+                        for other, reaction_set in prev_node[c]:
+                            for reaction in reaction_set:
+                                reaction_value[reaction] += 1
+                                new_path = list(path)
+                                new_path.append(reaction)
+                                open_nodes.append((other, new_path))
+                    else:
+                        path_count += 1
+
+                for r, v in iteritems(reaction_value):
+                    centrality[r] += v / float(path_count)
+
+    return iteritems(centrality)
+
+
+def find_ebc_breaks(connector, n=10):
+    breaks = set()
+    break_order = []
+    for i in range(n):
+        new_breaks = set()
+        break_compounds = set()
+        c = sorted(reaction_centrality(connector, breaks),
+                   key=lambda x: x[1], reverse=True)
+        max_value = c[0][1]
+        for (reaction, cpair), value in c:
+            if value < max_value:
+                logger.info('No more breaks: {}, {}'.format(
+                    reaction, value))
+                break
+            c1, c2 = cpair
+            if c1 in break_compounds or c2 in break_compounds:
+                logger.info('Skipping {} because compound'
+                            ' already broken'.format(reaction))
+                continue
+            logger.info('Break at {}, {}'.format(reaction, value))
+            new_breaks.add((reaction, cpair))
+            breaks.add((reaction, cpair))
+            break_compounds.add(c1)
+            break_compounds.add(c2)
+
+        break_order.append(new_breaks)
+
+    logger.info('Breaks: {}'.format(break_order))
+    return breaks
 
 
 class PathwaysCommand(MetabolicMixin, Command):
@@ -68,6 +166,8 @@ class PathwaysCommand(MetabolicMixin, Command):
             '--edge-values', type=str, default=None, help='Values for edges')
         parser.add_argument(
             '--clusters', type=str, default=None, help='Reaction clusters')
+        parser.add_argument(
+            '--breaks', type=int, default=0, help='EBC breaks')
         super(PathwaysCommand, cls).init_parser(parser)
 
     def run(self):
@@ -136,10 +236,12 @@ class PathwaysCommand(MetabolicMixin, Command):
         with open('connector_compounds.tsv', 'w') as f:
             self.write_connector_compounds_matrix(f, self._mm, connector)
 
+        breaks = find_ebc_breaks(connector, self._args.breaks)
+
         with open('connector.dot', 'w') as f:
             self.write_connector_graph(
                 f, connector, self._mm, biomass_reaction, edge_values,
-                clusters)
+                clusters, breaks)
 
         with open('reactions.dot', 'w') as f:
             self.write_reaction_graph(
@@ -315,7 +417,8 @@ class PathwaysCommand(MetabolicMixin, Command):
                 compound, '\t'.join(str(x) for x in values)))
 
     def write_connector_graph(
-            self, f, connector, model, biomass, edge_values, clusters):
+            self, f, connector, model, biomass, edge_values, clusters,
+            breaks):
         f.write('digraph pathways {\n')
 
         def ids(prefix):
@@ -331,6 +434,7 @@ class PathwaysCommand(MetabolicMixin, Command):
         compound_reaction = {}
         reaction_compound = {}
         reaction_props = {}
+        split_reaction = set()
         for compound in connector.compounds_forward():
             for other, reactions in connector.iter_all_forward(compound):
                 for (reaction, direction), cost in iteritems(reactions):
@@ -342,13 +446,38 @@ class PathwaysCommand(MetabolicMixin, Command):
 
                     key1 = compound, reaction
                     key2 = other, reaction
-                    if (key1 not in compound_reaction and
+                    cpair = tuple(sorted([compound, other]))
+                    if (reaction, cpair) in breaks:
+                        rids = []
+                        if key1 not in compound_reaction:
+                            rid = next(reaction_ids)
+                            compound_reaction[key1] = rid
+                            reaction_compound[rid] = set([compound])
+                            rids.append(rid)
+                            split_reaction.add(rid)
+                        else:
+                            split_reaction.add(compound_reaction[key1])
+
+                        if key2 not in compound_reaction:
+                            rid = next(reaction_ids)
+                            compound_reaction[key2] = rid
+                            reaction_compound[rid] = set([other])
+                            rids.append(rid)
+                            split_reaction.add(rid)
+                        else:
+                            split_reaction.add(compound_reaction[key2])
+
+                        logger.info('Keeping {}, {} separate'.format(
+                            compound, other))
+                    elif (key1 not in compound_reaction and
                             key2 not in compound_reaction):
                         rid = next(reaction_ids)
                         compound_reaction[key1] = rid
                         compound_reaction[key2] = rid
                         reaction_compound[rid] = set([compound, other])
-                        logger.info('Putting {}, {} in {}'.format(compound, other, rid))
+                        rids = [rid]
+                        logger.info('Putting {}, {} in {}'.format(
+                            compound, other, rid))
                     elif (key1 in compound_reaction and
                             key2 in compound_reaction):
                         rid = compound_reaction[key1]
@@ -361,21 +490,28 @@ class PathwaysCommand(MetabolicMixin, Command):
                                 logger.info('Moving {} to {}'.format(c, rid))
                             del reaction_compound[other_rid]
                             del reaction_props[other_rid]
+                        rids = [rid]
                     elif key1 in compound_reaction:
                         rid = compound_reaction[key1]
                         compound_reaction[key2] = rid
                         reaction_compound[rid].add(other)
+                        rids = [rid]
                         logger.info('Putting {} in {}'.format(other, rid))
                     elif key2 in compound_reaction:
                         rid = compound_reaction[key2]
                         compound_reaction[key1] = rid
                         reaction_compound[rid].add(compound)
+                        rids = [rid]
                         logger.info('Putting {} in {}'.format(compound, rid))
 
-                    reaction_props[rid] = {
-                        'label': reaction,
-                        'fillcolor': _REACTION_COLOR
-                    }
+                    for rid in rids:
+                        reaction_props[rid] = {
+                            'label': reaction,
+                            'fillcolor': _REACTION_COLOR
+                        }
+
+        for rid in split_reaction:
+            reaction_props[rid]['fillcolor'] = _ALT_COLOR
 
         min_edge_value = math.log(min(itervalues(edge_values)))
         max_edge_value = math.log(max(itervalues(edge_values)))
