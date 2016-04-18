@@ -304,7 +304,7 @@ class PathwaysCommand(MetabolicMixin, Command):
 
         connections = {}
         for compound in compounds:
-            for other, _ in connector.iter_all(compound):
+            for other, _ in connector.iter_all_forward(compound):
                 connections.setdefault(other, set()).add(compound)
 
         f.write('\t'.join(str(c) for c in compounds) + '\n')
