@@ -18,7 +18,7 @@
 import math
 import csv
 import logging
-from itertools import product
+from itertools import product, count
 from collections import defaultdict, Counter
 
 from ..command import Command, MetabolicMixin, CommandError
@@ -149,6 +149,83 @@ def find_ebc_breaks(connector, n=10):
     return breaks
 
 
+def tarjan_components(connector, breaks):
+    """Find strongly connected components."""
+    next_index = count()
+    compound_index = {}
+    compound_lowlink = {}
+
+    stack = []
+    open_compounds = set()
+    components = []
+
+    def strong_connect(compound):
+        compound_index[compound] = next(next_index)
+        compound_lowlink[compound] = compound_index[compound]
+        logger.info('Strong connect: {}, {}'.format(
+            compound, compound_index[compound]))
+
+        stack.append(compound)
+        open_compounds.add(compound)
+
+        for other, reactions in connector.iter_all_forward(compound):
+            cpair = tuple(sorted([compound, other]))
+            reaction_set = set()
+            for (reaction, direction), cost in iteritems(reactions):
+                if cost is None or (reaction, cpair) in breaks:
+                    continue
+                reaction_set.add((reaction, cpair))
+
+            if len(reaction_set) == 0:
+                continue
+
+            if other not in compound_index:
+                strong_connect(other)
+                compound_lowlink[compound] = min(
+                    compound_lowlink[compound], compound_lowlink[other])
+                logger.info('Update lowlink: {}={}'.format(
+                    compound, compound_lowlink[compound]))
+            elif other in open_compounds:
+                compound_lowlink[compound] = min(
+                    compound_lowlink[compound], compound_index[other])
+                logger.info('Update lowlink: {}={}'.format(
+                    compound, compound_lowlink[compound]))
+
+        if compound_index[compound] == compound_lowlink[compound]:
+            component = []
+            other = None
+            while other != compound:
+                other = stack.pop()
+                open_compounds.remove(other)
+                component.append(other)
+
+            logger.info('New SC component: {}: {}'.format(compound, component))
+
+            if len(component) > 2:
+                components.append(component)
+
+        logger.info('Done with {}'.format(compound))
+
+    for compound in connector.compounds_forward():
+        if compound not in compound_index:
+            strong_connect(compound)
+
+    return components
+
+
+def calculate_compound_degree(connector):
+    """Calculate the in-degree and out-degree for each compound."""
+    indegree = Counter()
+    outdegree = Counter()
+
+    for compound in connector.compounds_forward():
+        for other, reactions in connector.iter_all_forward(compound):
+            outdegree[compound] += 1
+            indegree[other] += 1
+
+    return indegree, outdegree
+
+
 class PathwaysCommand(MetabolicMixin, Command):
     """Find shortest paths between two compounds."""
 
@@ -246,6 +323,16 @@ class PathwaysCommand(MetabolicMixin, Command):
         with open('reactions.dot', 'w') as f:
             self.write_reaction_graph(
                 f, self._mm, self._mm.reactions, edge_values)
+
+        components = tarjan_components(connector, breaks)
+        for component in components:
+            logger.info('{}'.format(component))
+        logger.info('{} SC components'.format(len(components)))
+
+        indegree, outdegree = calculate_compound_degree(connector)
+        degree = indegree + outdegree
+        for compound, count in degree.most_common(50):
+            logger.info('{}: {}'.format(compound, count))
         return
 
         if self._args.source is not None:
