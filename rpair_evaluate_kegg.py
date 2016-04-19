@@ -133,8 +133,9 @@ if __name__ == '__main__':
                 compound_formula)
             if len(invalid_compounds) > 0:
                 logger.info(
-                    '{}: Skipping reaction where reaction pair carbon-transfers'
-                    ' are invalid! {}'.format(entry.id, invalid_compounds))
+                    '{}: Skipping reaction where reaction pair'
+                    ' carbon-transfers are invalid! {}'.format(
+                        entry.id, invalid_compounds))
                 skipped_invalid_rpairs += 1
                 continue
 
