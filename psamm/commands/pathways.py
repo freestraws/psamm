@@ -53,67 +53,76 @@ def path_use_values(paths):
                 values[edge] += 1
 
 
+def dijkstra_shortest(connector, breaks, source):
+    """Dijkstra's shortest paths from source."""
+
+    prev_node = {source: []}
+    dist = {source: 0}
+    open_nodes = Heap([source], key=lambda x: dist[x])
+    closed_nodes = set()
+
+    while len(open_nodes) > 0:
+        current = open_nodes.pop()
+        if current not in dist:
+            break
+
+        closed_nodes.add(current)
+
+        for other, reactions in connector.iter_all_forward(current):
+            cpair = tuple(sorted([current, other]))
+            if other in closed_nodes:
+                continue
+
+            reaction_set = set()
+            for (reaction, direction), cost in iteritems(reactions):
+                if cost is None or (reaction, cpair) in breaks:
+                    continue
+                reaction_set.add((reaction, cpair))
+
+            if len(reaction_set) == 0:
+                continue
+
+            alt_dist = dist[current] + 1
+            if other not in dist or alt_dist < dist[other]:
+                dist[other] = alt_dist
+                if other not in open_nodes:
+                    open_nodes.push(other)
+                else:
+                    open_nodes.update(other)
+                prev_node[other] = [(current, reaction_set)]
+            elif other in dist and alt_dist == dist[other]:
+                prev_node[other].append((current, reaction_set))
+
+    return dist, prev_node
+
+
 def reaction_centrality(connector, breaks):
     """Calculate reaction centrality."""
     centrality = Counter()
     for initial in connector.compounds_forward():
-        # Dijkstra
-        prev_node = {initial: []}
-        dist = {initial: 0}
-        open_nodes = Heap([initial], key=lambda x: dist[x])
-        closed_nodes = set()
+        dist, prev_node = dijkstra_shortest(connector, breaks, initial)
 
-        while len(open_nodes) > 0:
-            current = open_nodes.pop()
-            if current not in dist:
-                break
+        for compound, d in iteritems(dist):
+            if compound == initial:
+                continue
 
-            closed_nodes.add(current)
+            open_nodes = [(compound, [])]
+            path_count = 0
+            reaction_value = Counter()
+            while len(open_nodes) > 0:
+                c, path = open_nodes.pop()
+                if c != initial:
+                    for other, reaction_set in prev_node[c]:
+                        for reaction in reaction_set:
+                            reaction_value[reaction] += 1
+                            new_path = list(path)
+                            new_path.append(reaction)
+                            open_nodes.append((other, new_path))
+                else:
+                    path_count += 1
 
-            for other, reactions in connector.iter_all_forward(current):
-                cpair = tuple(sorted([current, other]))
-                if other in closed_nodes:
-                    continue
-
-                reaction_set = set()
-                for (reaction, direction), cost in iteritems(reactions):
-                    if cost is None or (reaction, cpair) in breaks:
-                        continue
-                    reaction_set.add((reaction, cpair))
-
-                if len(reaction_set) == 0:
-                    continue
-
-                alt_dist = dist[current] + cost
-                if other not in dist or alt_dist < dist[other]:
-                    dist[other] = alt_dist
-                    if other not in open_nodes:
-                        open_nodes.push(other)
-                    else:
-                        open_nodes.update(other)
-                    prev_node[other] = [(current, reaction_set)]
-                elif other in dist and alt_dist == dist[other]:
-                    prev_node[other].append((current, reaction_set))
-
-        for compound, d in sorted(iteritems(dist), key=lambda x: x[1]):
-            if compound != initial:
-                open_nodes = [(compound, [])]
-                path_count = 0
-                reaction_value = Counter()
-                while len(open_nodes) > 0:
-                    c, path = open_nodes.pop()
-                    if c != initial:
-                        for other, reaction_set in prev_node[c]:
-                            for reaction in reaction_set:
-                                reaction_value[reaction] += 1
-                                new_path = list(path)
-                                new_path.append(reaction)
-                                open_nodes.append((other, new_path))
-                    else:
-                        path_count += 1
-
-                for r, v in iteritems(reaction_value):
-                    centrality[r] += v / float(path_count)
+            for r, v in iteritems(reaction_value):
+                centrality[r] += v / float(path_count)
 
     return iteritems(centrality)
 
@@ -121,6 +130,7 @@ def reaction_centrality(connector, breaks):
 def find_ebc_breaks(connector, n=10):
     breaks = set()
     break_order = []
+
     for i in range(n):
         new_breaks = set()
         break_compounds = set()
