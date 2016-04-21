@@ -124,7 +124,35 @@ def reaction_centrality(connector, breaks):
             for r, v in iteritems(reaction_value):
                 centrality[r] += v / float(path_count)
 
-    return iteritems(centrality)
+    return centrality
+
+
+def compound_centrality(connector, breaks):
+    """Calculate compound centrality."""
+    centrality = Counter()
+    for initial in connector.compounds_forward():
+        dist, prev_node = dijkstra_shortest(connector, breaks, initial)
+
+        for compound, d in iteritems(dist):
+            if compound == initial:
+                continue
+
+            open_nodes = [compound]
+            path_count = 0
+            compound_value = Counter()
+            while len(open_nodes) > 0:
+                c = open_nodes.pop()
+                if c != initial:
+                    for other, _ in prev_node[c]:
+                        compound_value[other] += 1
+                        open_nodes.append(other)
+                else:
+                    path_count += 1
+
+            for c, v in iteritems(compound_value):
+                centrality[c] += v / float(path_count)
+
+    return centrality
 
 
 def find_ebc_breaks(connector, n=10):
@@ -134,7 +162,7 @@ def find_ebc_breaks(connector, n=10):
     for i in range(n):
         new_breaks = set()
         break_compounds = set()
-        c = sorted(reaction_centrality(connector, breaks),
+        c = sorted(iteritems(reaction_centrality(connector, breaks)),
                    key=lambda x: x[1], reverse=True)
         max_value = c[0][1]
         for (reaction, cpair), value in c:
