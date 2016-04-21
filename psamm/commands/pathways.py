@@ -181,6 +181,11 @@ def find_ebc_breaks(connector, n=10):
             break_compounds.add(c1)
             break_compounds.add(c2)
 
+        with open('ebc-{}.tsv'.format(i), 'w') as f:
+            for (reaction, cpair), value in c:
+                f.write('{}\t{}\t{}\t{}\n'.format(
+                    reaction, cpair[0], cpair[1], value))
+
         break_order.append(new_breaks)
 
     logger.info('Breaks: {}'.format(break_order))
@@ -370,28 +375,7 @@ class PathwaysCommand(MetabolicMixin, Command):
         #connector = pathways.Connector(self._model, cost_func, disconnect)
         connector = pathways.RpairConnector(self._model, subset, cost_func)
 
-        for edge, value in sorted(iteritems(edge_values)):
-            logger.info('EDGE {}: {}'.format(edge, value))
-
-        with open('reactions.tsv', 'w') as f:
-            self.write_reaction_matrix(f, self._mm)
-
-        with open('reaction_compounds.tsv', 'w') as f:
-            self.write_reaction_compounds_matrix(f, self._mm)
-
-        with open('connector_compounds.tsv', 'w') as f:
-            self.write_connector_compounds_matrix(f, self._mm, connector)
-
         breaks = find_ebc_breaks(connector, self._args.breaks)
-
-        with open('connector.dot', 'w') as f:
-            self.write_connector_graph(
-                f, connector, self._mm, biomass_reaction, edge_values,
-                clusters, breaks)
-
-        with open('reactions.dot', 'w') as f:
-            self.write_reaction_graph(
-                f, self._mm, self._mm.reactions, edge_values)
 
         components = tarjan_components(connector, breaks)
         for component in components:
@@ -402,6 +386,56 @@ class PathwaysCommand(MetabolicMixin, Command):
         degree = indegree + outdegree
         for compound, count in degree.most_common(50):
             logger.info('{}: {}'.format(compound, count))
+
+        def connectivity_score(n_size, count):
+            max_edges = n_size * (n_size-1)
+            return float(max_edges - count) / (max_edges + count)
+
+        coeffs = calculate_clustering_coefficients(connector)
+        for compound, value in sorted(
+                iteritems(coeffs), key=lambda x: connectivity_score(*x[1])):
+            n_size, count = value
+            logger.info('CC: {}: {}, {}'.format(
+                compound, value, connectivity_score(n_size, count)))
+
+        centrality = reaction_centrality(connector, breaks)
+
+        with open('reactions.tsv', 'w') as f:
+            self.write_reaction_matrix(f, self._mm)
+
+        with open('reaction_compounds.tsv', 'w') as f:
+            self.write_reaction_compounds_matrix(f, self._mm)
+
+        with open('connector_compounds.tsv', 'w') as f:
+            self.write_connector_compounds_matrix(f, self._mm, connector)
+
+        def compound_label(compound):
+            label = str(compound)
+            if compound in coeffs:
+                label += '\n{:.2f}'.format(
+                    connectivity_score(*coeffs[compound]))
+            return label
+
+        def reaction_label(reaction, pairs):
+            label = str(reaction)
+            for pair in pairs:
+                spair = tuple(sorted(pair))
+                if (reaction, spair) in centrality:
+                    label += '\n{}<=>{}: {:.2f}'.format(
+                        pair[0], pair[1], centrality[reaction, spair])
+            return label
+
+        with open('connector.dot', 'w') as f:
+            self.write_connector_graph(
+                f, connector, self._mm, biomass_reaction, edge_values,
+                clusters, breaks, compound_label, reaction_label)
+
+        with open('reactions.dot', 'w') as f:
+            self.write_reaction_graph(
+                f, self._mm, self._mm.reactions, edge_values)
+
+        for r, v in iteritems(centrality):
+            logger.info('{}: {}'.format(r, v))
         return
 
         if self._args.source is not None:
