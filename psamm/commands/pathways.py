@@ -264,6 +264,37 @@ def calculate_compound_degree(connector):
     return indegree, outdegree
 
 
+def calculate_clustering_coefficients(connector):
+    """Calculate the local clustering for each compounds.
+
+    Return neighborhood size and raw edge saturation count.
+    """
+    values = {}
+    for compound in connector.compounds_forward():
+        # Neighborhood is the set of compounds with out-edges to compound or
+        # in-edges from compound.
+        neighborhood = set(
+            other for other, _ in connector.iter_all_forward(compound))
+        neighborhood.update(
+            other for other, _ in connector.iter_all(compound))
+
+        n_size = len(neighborhood)
+        if n_size < 2:
+            continue
+
+        count = 0
+        for c1, c2 in product(neighborhood, neighborhood):
+            if c1 == c2:
+                continue
+
+            if connector.has_forward(c1, c2):
+                count += 1
+
+        values[compound] = n_size, count
+
+    return values
+
+
 class PathwaysCommand(MetabolicMixin, Command):
     """Find shortest paths between two compounds."""
 

@@ -228,6 +228,9 @@ class Connector(object):
     def has(self, c1, c2):
         return c1 in self._connections and c2 in self._connections[c1]
 
+    def has_forward(self, c1, c2):
+        return c1 in self._forward and c2 in self._forward[c1]
+
     def get(self, c1, c2):
         if c1 not in self._connections:
             return None
