@@ -574,8 +574,14 @@ class PathwaysCommand(MetabolicMixin, Command):
 
     def write_connector_graph(
             self, f, connector, model, biomass, edge_values, clusters,
-            breaks):
+            breaks, compound_label=None, reaction_label=None):
         f.write('digraph pathways {\n')
+
+        if compound_label is None:
+            compound_label = str
+
+        if reaction_label is None:
+            reaction_label = lambda x: str(x[0])
 
         def ids(prefix):
             i = 0
@@ -588,7 +594,9 @@ class PathwaysCommand(MetabolicMixin, Command):
 
         # Split reaction nodes into nodes that do not share compounds.
         compound_reaction = {}
+        reaction_name = {}
         reaction_compound = {}
+        reaction_pairs = {}
         reaction_props = {}
         split_reaction = set()
         for compound in connector.compounds_forward():
@@ -604,12 +612,11 @@ class PathwaysCommand(MetabolicMixin, Command):
                     key2 = other, reaction
                     cpair = tuple(sorted([compound, other]))
                     if (reaction, cpair) in breaks:
-                        rids = []
                         if key1 not in compound_reaction:
                             rid = next(reaction_ids)
                             compound_reaction[key1] = rid
-                            reaction_compound[rid] = set([compound])
-                            rids.append(rid)
+                            reaction_compound[rid] = {compound}
+                            reaction_name[rid] = reaction
                             split_reaction.add(rid)
                         else:
                             split_reaction.add(compound_reaction[key1])
@@ -617,8 +624,8 @@ class PathwaysCommand(MetabolicMixin, Command):
                         if key2 not in compound_reaction:
                             rid = next(reaction_ids)
                             compound_reaction[key2] = rid
-                            reaction_compound[rid] = set([other])
-                            rids.append(rid)
+                            reaction_compound[rid] = {other}
+                            reaction_name[rid] = reaction
                             split_reaction.add(rid)
                         else:
                             split_reaction.add(compound_reaction[key2])
@@ -630,8 +637,9 @@ class PathwaysCommand(MetabolicMixin, Command):
                         rid = next(reaction_ids)
                         compound_reaction[key1] = rid
                         compound_reaction[key2] = rid
-                        reaction_compound[rid] = set([compound, other])
-                        rids = [rid]
+                        reaction_compound[rid] = {compound, other}
+                        reaction_name[rid] = reaction
+                        reaction_pairs[rid] = {(compound, other)}
                         logger.info('Putting {}, {} in {}'.format(
                             compound, other, rid))
                     elif (key1 in compound_reaction and
@@ -644,30 +652,43 @@ class PathwaysCommand(MetabolicMixin, Command):
                                 compound_reaction[c, reaction] = rid
                                 reaction_compound[rid].add(c)
                                 logger.info('Moving {} to {}'.format(c, rid))
+                            reaction_pairs.setdefault(rid, set()).update(
+                                reaction_pairs.get(other_rid, set()))
+
+                            del reaction_name[other_rid]
                             del reaction_compound[other_rid]
-                            del reaction_props[other_rid]
-                        rids = [rid]
+                            del reaction_pairs[other_rid]
                     elif key1 in compound_reaction:
                         rid = compound_reaction[key1]
                         compound_reaction[key2] = rid
                         reaction_compound[rid].add(other)
-                        rids = [rid]
+                        reaction_name[rid] = reaction
+                        reaction_pairs.setdefault(rid, set()).add(
+                            (compound, other))
                         logger.info('Putting {} in {}'.format(other, rid))
                     elif key2 in compound_reaction:
                         rid = compound_reaction[key2]
                         compound_reaction[key1] = rid
                         reaction_compound[rid].add(compound)
-                        rids = [rid]
+                        reaction_name[rid] = reaction
+                        reaction_pairs.setdefault(rid, set()).add(
+                            (compound, other))
                         logger.info('Putting {} in {}'.format(compound, rid))
 
-                    for rid in rids:
-                        reaction_props[rid] = {
-                            'label': reaction,
-                            'fillcolor': _REACTION_COLOR
-                        }
+        for rid, reaction in iteritems(reaction_name):
+            color = _REACTION_COLOR
+            if rid in split_reaction:
+                color = _ALT_COLOR
 
-        for rid in split_reaction:
-            reaction_props[rid]['fillcolor'] = _ALT_COLOR
+            logger.info('{}, {}: {}'.format(
+                rid, reaction, reaction_pairs.get(rid, set())))
+
+            label = reaction_label(reaction, reaction_pairs.get(rid, set()))
+
+            reaction_props[rid] = {
+                'label': label,
+                'fillcolor': color
+            }
 
         min_edge_value = math.log(min(itervalues(edge_values)))
         max_edge_value = math.log(max(itervalues(edge_values)))
@@ -693,7 +714,7 @@ class PathwaysCommand(MetabolicMixin, Command):
                         compound_id = next(compound_ids)
                         compound_id_map[compound, cluster] = compound_id
                         compound_props[compound_id] = {
-                            'label': str(compound),
+                            'label': compound_label(compound),
                             'fillcolor': _COMPOUND_COLOR
                         }
                     else:
@@ -704,7 +725,7 @@ class PathwaysCommand(MetabolicMixin, Command):
                         other_id = next(compound_ids)
                         compound_id_map[other, cluster] = other_id
                         compound_props[other_id] = {
-                            'label': str(other),
+                            'label': compound_label(other),
                             'fillcolor': _COMPOUND_COLOR
                         }
                     else:
@@ -734,7 +755,7 @@ class PathwaysCommand(MetabolicMixin, Command):
                 if (c, cluster) in compound_id_map:
                     reaction_id = next(reaction_ids)
                     reaction_props[reaction_id] = {
-                        'label': reaction,
+                        'label': reaction_label(reaction, set()),
                         'fillcolor': _ACTIVE_COLOR
                     }
 
@@ -752,7 +773,7 @@ class PathwaysCommand(MetabolicMixin, Command):
                 if (c, cluster) in compound_id_map:
                     reaction_id = next(reaction_ids)
                     reaction_props[reaction_id] = {
-                        'label': biomass,
+                        'label': reaction_label(biomass, set()),
                         'fillcolor': _ACTIVE_COLOR
                     }
 
