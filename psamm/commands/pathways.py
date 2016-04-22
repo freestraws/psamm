@@ -686,12 +686,16 @@ class PathwaysCommand(MetabolicMixin, Command):
                                 compound_reaction[c, reaction] = rid
                                 reaction_compound[rid].add(c)
                                 logger.info('Moving {} to {}'.format(c, rid))
-                            reaction_pairs.setdefault(rid, set()).update(
+
+                            # Add new pair and transfer from other reaction
+                            reaction_pairs.setdefault(rid, set()).add(
+                                (compound, other))
+                            reaction_pairs[rid].update(
                                 reaction_pairs.get(other_rid, set()))
 
                             del reaction_name[other_rid]
                             del reaction_compound[other_rid]
-                            del reaction_pairs[other_rid]
+                            reaction_pairs.pop(other_rid, None)
                     elif key1 in compound_reaction:
                         rid = compound_reaction[key1]
                         compound_reaction[key2] = rid
@@ -766,17 +770,17 @@ class PathwaysCommand(MetabolicMixin, Command):
                         other_id = compound_id_map[other, cluster]
 
                     # Create inbound/outbound connections
-                    key = other_id, compound_reaction[other, reaction]
-                    if key not in inbound_reaction:
-                        inbound_reaction[key] = 0
-                    inbound_reaction[key] += edge_values.get(
-                        (other, reaction), 0)
-
-                    key = compound_reaction[compound, reaction], compound_id
+                    key = compound_reaction[other, reaction], other_id
                     if key not in outbound_reaction:
                         outbound_reaction[key] = 0
                     outbound_reaction[key] += edge_values.get(
-                        (reaction, compound), 0)
+                        (reaction, other), 0)
+
+                    key = compound_id, compound_reaction[compound, reaction]
+                    if key not in inbound_reaction:
+                        inbound_reaction[key] = 0
+                    inbound_reaction[key] += edge_values.get(
+                        (compound, reaction), 0)
 
         # Add exchange reaction nodes to graph
         for reaction in model.reactions:
