@@ -58,6 +58,7 @@ def dijkstra_shortest(connector, breaks, source):
 
     prev_node = {source: []}
     dist = {source: 0}
+    path_count = Counter({source: 1})
     open_nodes = Heap([source], key=lambda x: dist[x])
     closed_nodes = set()
 
@@ -89,40 +90,36 @@ def dijkstra_shortest(connector, breaks, source):
                     open_nodes.push(other)
                 else:
                     open_nodes.update(other)
+                path_count[other] = path_count[current] * len(reaction_set)
                 prev_node[other] = [(current, reaction_set)]
             elif other in dist and alt_dist == dist[other]:
+                path_count[other] += path_count[current] * len(reaction_set)
                 prev_node[other].append((current, reaction_set))
 
-    return dist, prev_node
+    return dist, prev_node, path_count
 
 
 def reaction_centrality(connector, breaks):
     """Calculate reaction centrality."""
     centrality = Counter()
     for initial in connector.compounds_forward():
-        dist, prev_node = dijkstra_shortest(connector, breaks, initial)
+        dependency = Counter()
+        reaction_dependency = Counter()
+        dist, prev_node, path_count = dijkstra_shortest(
+            connector, breaks, initial)
 
-        for compound, d in iteritems(dist):
-            if compound == initial:
-                continue
+        for compound, d in sorted(
+                iteritems(dist), key=lambda x: x[1], reverse=True):
+            for other, reaction_set in prev_node[compound]:
+                ratio = path_count[other] / float(path_count[compound])
+                dep = ratio * (1 + dependency[compound])
+                dependency[other] += dep
 
-            open_nodes = [(compound, [])]
-            path_count = 0
-            reaction_value = Counter()
-            while len(open_nodes) > 0:
-                c, path = open_nodes.pop()
-                if c != initial:
-                    for other, reaction_set in prev_node[c]:
-                        for reaction in reaction_set:
-                            reaction_value[reaction] += 1
-                            new_path = list(path)
-                            new_path.append(reaction)
-                            open_nodes.append((other, new_path))
-                else:
-                    path_count += 1
+                for reaction in reaction_set:
+                    reaction_dependency[reaction] += dep
 
-            for r, v in iteritems(reaction_value):
-                centrality[r] += v / float(path_count)
+        for reaction, value in iteritems(reaction_dependency):
+            centrality[reaction] += value
 
     return centrality
 
@@ -131,26 +128,18 @@ def compound_centrality(connector, breaks):
     """Calculate compound centrality."""
     centrality = Counter()
     for initial in connector.compounds_forward():
-        dist, prev_node = dijkstra_shortest(connector, breaks, initial)
+        dependency = Counter()
+        dist, prev_node, path_count = dijkstra_shortest(
+            connector, breaks, initial)
 
-        for compound, d in iteritems(dist):
-            if compound == initial:
-                continue
+        for compound, d in sorted(
+                iteritems(dist), key=lambda x: x[1], reverse=True):
+            for other, _ in prev_node[compound]:
+                ratio = path_count[other] / float(path_count[compound])
+                dependency[other] += ratio * (1 + dependency[compound])
 
-            open_nodes = [compound]
-            path_count = 0
-            compound_value = Counter()
-            while len(open_nodes) > 0:
-                c = open_nodes.pop()
-                if c != initial:
-                    for other, _ in prev_node[c]:
-                        compound_value[other] += 1
-                        open_nodes.append(other)
-                else:
-                    path_count += 1
-
-            for c, v in iteritems(compound_value):
-                centrality[c] += v / float(path_count)
+            if compound != initial:
+                centrality[compound] += dependency[compound]
 
     return centrality
 
