@@ -164,7 +164,8 @@ def find_ebc_breaks(connector, n=10):
                 logger.info('Skipping {} because compound'
                             ' already broken'.format(reaction))
                 continue
-            logger.info('Break at {}, {}'.format(reaction, value))
+            logger.info('Break at {} ({}<->{}), {}'.format(
+                reaction, c1, c2, value))
             new_breaks.add((reaction, cpair))
             breaks.add((reaction, cpair))
             break_compounds.add(c1)
