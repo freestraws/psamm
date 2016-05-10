@@ -79,6 +79,9 @@ def dijkstra_shortest(connector, source):
             if len(reaction_set) == 0:
                 continue
 
+            #count = len(reaction_set)
+            count = 1
+
             alt_dist = dist[current] + 1
             if other not in dist or alt_dist < dist[other]:
                 dist[other] = alt_dist
@@ -86,10 +89,10 @@ def dijkstra_shortest(connector, source):
                     open_nodes.push(other)
                 else:
                     open_nodes.update(other)
-                path_count[other] = path_count[current] * len(reaction_set)
+                path_count[other] = path_count[current] * count
                 prev_node[other] = [(current, reaction_set)]
             elif other in dist and alt_dist == dist[other]:
-                path_count[other] += path_count[current] * len(reaction_set)
+                path_count[other] += path_count[current] * count
                 prev_node[other].append((current, reaction_set))
 
     return dist, prev_node, path_count
