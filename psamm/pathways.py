@@ -265,6 +265,42 @@ class CostConnector(Connector):
         return self._cost_func.actual_cost(source, dest)
 
 
+class UndirectedConnector(Connector):
+    """Connector wrapper that makes every edge bidirectional."""
+    def __init__(self, connector):
+        self._connector = connector
+
+    def compounds(self):
+        return self._connector.compounds()
+
+    def iter_all(self, compound):
+        return self._connector.iter_all(compound)
+
+    iter_all_forward = iter_all
+    iter_all_reverse = iter_all
+
+    def has(self, c1, c2):
+        return self._connector.has(c1, c2)
+
+    has_forward = has
+    has_reverse = has
+
+    def _get(self, c1, c2):
+        d = {}
+        forward = self._connector.get_forward(c1, c2)
+        if forward is not None:
+            d.update(forward)
+
+        reverse = self._connector.get_reverse(c1, c2)
+        if reverse is not None:
+            d.update(reverse)
+
+        return d if len(d) > 0 else None
+
+    get_forward = _get
+    get_reverse = _get
+
+
 class RpairConnector(CostConnector):
     def __init__(self, model, subset, cost_func):
         self._rpairs = {}
