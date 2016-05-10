@@ -189,11 +189,6 @@ def find_ebc_breaks(connector, n=10):
             break_compounds.add(c1)
             break_compounds.add(c2)
 
-        with open('ebc-{}.tsv'.format(i), 'w') as f:
-            for (c1, c2), value in c:
-                f.write('{}\t{}\t{}\n'.format(
-                    c1, c2, value))
-
         break_order.append(new_breaks)
 
     logger.info('Breaks: {}'.format(break_order))
