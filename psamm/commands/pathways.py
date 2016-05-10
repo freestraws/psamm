@@ -232,8 +232,7 @@ def tarjan_components(connector, breaks):
 
             logger.info('New SC component: {}: {}'.format(compound, component))
 
-            if len(component) > 2:
-                components.append(component)
+            components.append(component)
 
         logger.info('Done with {}'.format(compound))
 
