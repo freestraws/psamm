@@ -51,7 +51,7 @@ def path_use_values(paths):
                 values[edge] += 1
 
 
-def dijkstra_shortest(connector, breaks, source):
+def dijkstra_shortest(connector, source):
     """Dijkstra's shortest paths from source."""
 
     prev_node = {source: []}
@@ -74,8 +74,6 @@ def dijkstra_shortest(connector, breaks, source):
 
             reaction_set = set()
             for (reaction, direction), cost in iteritems(reactions):
-                if cost is None or (reaction, cpair) in breaks:
-                    continue
                 reaction_set.add((reaction, cpair))
 
             if len(reaction_set) == 0:
@@ -97,14 +95,13 @@ def dijkstra_shortest(connector, breaks, source):
     return dist, prev_node, path_count
 
 
-def reaction_centrality(connector, breaks):
+def reaction_centrality(connector):
     """Calculate reaction centrality."""
     centrality = Counter()
     for initial in connector.compounds():
         dependency = Counter()
         reaction_dependency = Counter()
-        dist, prev_node, path_count = dijkstra_shortest(
-            connector, breaks, initial)
+        dist, prev_node, path_count = dijkstra_shortest(connector, initial)
 
         for compound, d in sorted(
                 iteritems(dist), key=lambda x: x[1], reverse=True):
@@ -122,13 +119,12 @@ def reaction_centrality(connector, breaks):
     return centrality
 
 
-def compound_centrality(connector, breaks):
+def compound_centrality(connector):
     """Calculate compound centrality."""
     centrality = Counter()
     for initial in connector.compounds():
         dependency = Counter()
-        dist, prev_node, path_count = dijkstra_shortest(
-            connector, breaks, initial)
+        dist, prev_node, path_count = dijkstra_shortest(connector, initial)
 
         for compound, d in sorted(
                 iteritems(dist), key=lambda x: x[1], reverse=True):
@@ -143,13 +139,13 @@ def compound_centrality(connector, breaks):
 
 
 def find_ebc_breaks(connector, n=10):
-    breaks = set()
+    connector = pathways.CompoundPairSubsetConnector(connector)
     break_order = []
 
     for i in range(n):
         new_breaks = set()
         break_compounds = set()
-        c = sorted(iteritems(reaction_centrality(connector, breaks)),
+        c = sorted(iteritems(reaction_centrality(connector)),
                    key=lambda x: x[1], reverse=True)
         max_value = c[0][1]
         for (reaction, cpair), value in c:
@@ -165,7 +161,7 @@ def find_ebc_breaks(connector, n=10):
             logger.info('Break at {} ({}<->{}), {}'.format(
                 reaction, c1, c2, value))
             new_breaks.add((reaction, cpair))
-            breaks.add((reaction, cpair))
+            connector.add_break(c1, c2)
             break_compounds.add(c1)
             break_compounds.add(c2)
 
@@ -177,7 +173,7 @@ def find_ebc_breaks(connector, n=10):
         break_order.append(new_breaks)
 
     logger.info('Breaks: {}'.format(break_order))
-    return breaks
+    return set(connector.breaks())
 
 
 def find_components(connector):
@@ -212,7 +208,7 @@ def find_components(connector):
     return components
 
 
-def tarjan_components(connector, breaks):
+def tarjan_components(connector):
     """Find strongly connected components."""
     next_index = count()
     compound_index = {}
@@ -232,16 +228,6 @@ def tarjan_components(connector, breaks):
         open_compounds.add(compound)
 
         for other, reactions in connector.iter_all_forward(compound):
-            cpair = tuple(sorted([compound, other]))
-            reaction_set = set()
-            for (reaction, direction), cost in iteritems(reactions):
-                if cost is None or (reaction, cpair) in breaks:
-                    continue
-                reaction_set.add((reaction, cpair))
-
-            if len(reaction_set) == 0:
-                continue
-
             if other not in compound_index:
                 strong_connect(other)
                 compound_lowlink[compound] = min(
@@ -392,15 +378,32 @@ class PathwaysCommand(MetabolicMixin, Command):
         #connector = pathways.Connector(self._model, cost_func, disconnect)
         connector = pathways.RpairConnector(self._model, subset, cost_func)
 
-        breaks = find_ebc_breaks(connector, self._args.breaks)
+        breaks = find_ebc_breaks(
+            pathways.UndirectedConnector(connector), self._args.breaks)
+        break_connector = pathways.CompoundPairSubsetConnector(
+            connector, breaks)
 
-        components = tarjan_components(connector, breaks)
+        components = tarjan_components(break_connector)
         for component in components:
             logger.info('{}'.format(component))
-        logger.info('{} SC components'.format(len(components)))
+        logger.info('{} SC components (>2: {})'.format(
+            len(components), sum(len(c) > 2 for c in components)))
+
+        components = find_components(break_connector)
+        for component in components:
+            logger.info('{}'.format(component))
+        logger.info('{} components (>2: {})'.format(
+            len(components), sum(len(c) > 2 for c in components)))
 
         indegree, outdegree = calculate_compound_degree(connector)
         degree = indegree + outdegree
+        logger.info('Degree before EBC:')
+        for compound, count in degree.most_common(50):
+            logger.info('{}: {}'.format(compound, count))
+
+        indegree, outdegree = calculate_compound_degree(break_connector)
+        degree = indegree + outdegree
+        logger.info('Degree after EBC:')
         for compound, count in degree.most_common(50):
             logger.info('{}: {}'.format(compound, count))
 
@@ -415,7 +418,7 @@ class PathwaysCommand(MetabolicMixin, Command):
             logger.info('CC: {}: {}, {}'.format(
                 compound, value, connectivity_score(n_size, count)))
 
-        centrality = reaction_centrality(connector, breaks)
+        centrality = reaction_centrality(connector)
 
         with open('reactions.tsv', 'w') as f:
             self.write_reaction_matrix(f, self._mm)
