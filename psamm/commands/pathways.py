@@ -23,7 +23,7 @@ from collections import defaultdict, Counter
 
 from ..command import Command, MetabolicMixin, CommandError
 from ..reaction import Compound, Direction
-from .. import pathways
+from .. import pathways, graph
 from ..datasource.reaction import parse_compound
 from ..heap import Heap
 
@@ -36,9 +36,7 @@ _COMPOUND_COLOR = '#b3cde3'
 _ACTIVE_COLOR = '#fbb4ae'
 _ALT_COLOR = '#ccb460'
 
-
-def gv_props(d):
-    return ','.join('{}="{}"'.format(k, v) for k, v in iteritems(d))
+_INVIS_NODE = {'shape': 'point', 'width': 0}
 
 
 def path_use_values(paths):
@@ -508,11 +506,15 @@ class PathwaysCommand(MetabolicMixin, Command):
                 compound, '\t'.join(str(x) for x in values)))
 
     def write_reaction_graph(self, f, model, subset, edge_values):
-        f.write('digraph pathways {\n')
+        g = graph.Graph()
 
+        compound_nodes = {}
         for compound in model.compounds:
-            f.write('  "{}" [style=filled,fillcolor="{}"];\n'.format(
-                compound, _COMPOUND_COLOR))
+            node = graph.Node({
+                'style': 'filled',
+                'fillcolor': _COMPOUND_COLOR})
+            g.add_node(node)
+            compound_nodes[compound] = node
 
         min_edge_value = math.log(min(itervalues(edge_values)))
         max_edge_value = math.log(max(itervalues(edge_values)))
@@ -535,14 +537,14 @@ class PathwaysCommand(MetabolicMixin, Command):
             if model.is_exchange(reaction):
                 color = _ACTIVE_COLOR
 
-            reaction_props = {
+            node = graph.Node({
                 'shape': 'box',
                 'style': 'filled',
                 'fillcolor': color
-            }
-            f.write('  "{}"[{}];\n'.format(reaction, gv_props(reaction_props)))
+            })
+            g.add_node(node)
 
-            props = {'dir': dir_value(rx.direction)}
+            edge_props = {'dir': dir_value(rx.direction)}
 
             def pen_width(value):
                 return (9 * (math.log(value) - min_edge_value) /
@@ -567,18 +569,16 @@ class PathwaysCommand(MetabolicMixin, Command):
             for c, _ in rx.left:
                 edge1 = c, reaction
                 edge2 = reaction, c
-
-                f.write('  "{}" -> "{}"[{}];\n'.format(
-                    c, reaction, gv_props(final_props(edge1, edge2))))
+                g.add_edge(graph.Edge(
+                    compound_nodes[c], node, final_props(edge1, edge2)))
 
             for c, _ in rx.right:
                 edge1 = reaction, c
                 edge2 = c, reaction
+                g.add_edge(graph.Edge(
+                    node, compound_nodes[c], final_props(edge1, edge2)))
 
-                f.write('  "{}" -> "{}"[{}];\n'.format(
-                    reaction, c, gv_props(final_props(edge1, edge2))))
-
-        f.write('}\n')
+        g.write_graphviz(f)
 
     def write_connector_compounds_matrix(self, f, model, connector):
         compounds = sorted(model.compounds)
@@ -599,7 +599,7 @@ class PathwaysCommand(MetabolicMixin, Command):
     def write_connector_graph(
             self, f, connector, model, biomass, edge_values, clusters,
             breaks, compound_label=None, reaction_label=None):
-        f.write('digraph pathways {\n')
+        g = graph.Graph()
 
         if compound_label is None:
             compound_label = str
@@ -782,6 +782,7 @@ class PathwaysCommand(MetabolicMixin, Command):
             for c, _ in rx.compounds:
                 if (c, cluster) in compound_id_map:
                     reaction_id = next(reaction_ids)
+                    reaction_name[reaction_id] = reaction
                     reaction_props[reaction_id] = {
                         'label': reaction_label(reaction, set()),
                         'fillcolor': _ACTIVE_COLOR
@@ -800,6 +801,7 @@ class PathwaysCommand(MetabolicMixin, Command):
             for c, _ in rx.left:
                 if (c, cluster) in compound_id_map:
                     reaction_id = next(reaction_ids)
+                    reaction_name[reaction_id] = biomass
                     reaction_props[reaction_id] = {
                         'label': reaction_label(biomass, set()),
                         'fillcolor': _ACTIVE_COLOR
@@ -819,30 +821,56 @@ class PathwaysCommand(MetabolicMixin, Command):
                          edge_value_span) + 1)
             return props
 
-        for (compound, reaction), flux in iteritems(inbound_reaction):
-            f.write('  "{}" -> "{}"[{}];\n'.format(
-                compound, reaction, gv_props(edge_props(flux))))
-
-        for (reaction, compound), flux in iteritems(outbound_reaction):
-            f.write('  "{}" -> "{}"[{}];\n'.format(
-                reaction, compound, gv_props(edge_props(flux))))
-
+        compound_nodes = {}
         for compound, props in iteritems(compound_props):
-            p = {
-                'style': 'filled',
-            }
-            p.update(props)
-            f.write('  "{}"[{}];\n'.format(compound, gv_props(p)))
+            node = graph.Node({'style': 'filled'})
+            node.props.update(props)
+            g.add_node(node)
+            compound_nodes[compound] = node
 
+        reaction_nodes = {}
         for reaction, props in iteritems(reaction_props):
-            p = {
+            node = graph.Node({
                 'shape': 'box',
                 'style': 'filled',
-            }
-            p.update(props)
-            f.write('  "{}"[{}];\n'.format(reaction, gv_props(p)))
+            })
+            node.props.update(props)
+            g.add_node(node)
 
-        f.write('}\n')
+            input_node = graph.Node(_INVIS_NODE)
+            g.add_node(input_node)
+
+            output_node = graph.Node(_INVIS_NODE)
+            g.add_node(output_node)
+
+            g.add_edge(graph.Edge(input_node, node))
+            g.add_edge(graph.Edge(node, output_node))
+
+            reaction_nodes[reaction] = input_node, output_node
+
+            if reaction in reaction_compound:
+                for c, v in model.get_reaction_values(reaction_name[reaction]):
+                    if c not in reaction_compound[reaction]:
+                        c_node = graph.Node({
+                            'xlabel': str(c), 'fontsize': 10,
+                            'shape': 'point', 'width': 0, 'margin': 0})
+                        g.add_node(c_node)
+                        if v < 0:
+                            g.add_edge(graph.Edge(c_node, input_node))
+                        else:
+                            g.add_edge(graph.Edge(output_node, c_node))
+
+        for (compound, reaction), flux in iteritems(inbound_reaction):
+            g.add_edge(graph.Edge(
+                compound_nodes[compound], reaction_nodes[reaction][0],
+                edge_props(flux)))
+
+        for (reaction, compound), flux in iteritems(outbound_reaction):
+            g.add_edge(graph.Edge(
+                reaction_nodes[reaction][1], compound_nodes[compound],
+                edge_props(flux)))
+
+        g.write_graphviz(f)
 
     def write_graph(self, f, paths, source, dest, edge_values):
         if len(paths) == 0:
