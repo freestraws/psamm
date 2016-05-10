@@ -180,6 +180,38 @@ def find_ebc_breaks(connector, n=10):
     return breaks
 
 
+def find_components(connector):
+    """Find connected components."""
+    next_index = count()
+    compound_index = {}
+    components = []
+
+    def connect(compound, index):
+        compound_index[compound] = index
+        stack = [compound]
+        component = {compound}
+
+        while len(stack) > 0:
+            compound = stack.pop()
+            for other, reactions in connector.iter_all(compound):
+                if other in compound_index:
+                    continue
+
+                component.add(other)
+                compound_index[other] = index
+                stack.append(other)
+
+        return component
+
+    for compound in connector.compounds():
+        if compound not in compound_index:
+            component_id = next(next_index)
+            component = connect(compound, component_id)
+            components.append(component)
+
+    return components
+
+
 def tarjan_components(connector, breaks):
     """Find strongly connected components."""
     next_index = count()
