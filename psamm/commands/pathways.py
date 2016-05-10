@@ -119,6 +119,26 @@ def reaction_centrality(connector):
     return centrality
 
 
+def reaction_pair_centrality(connector):
+    """Calculate reaction pair centrality."""
+    centrality = Counter()
+    for initial in connector.compounds():
+        dependency = Counter()
+        dist, prev_node, path_count = dijkstra_shortest(connector, initial)
+
+        for compound, d in sorted(
+                iteritems(dist), key=lambda x: x[1], reverse=True):
+            for other, reaction_set in prev_node[compound]:
+                ratio = path_count[other] / float(path_count[compound])
+                dep = ratio * (1 + dependency[compound])
+                dependency[other] += dep
+
+                cpair = tuple(sorted([compound, other]))
+                centrality[cpair] += dep
+
+    return centrality
+
+
 def compound_centrality(connector):
     """Calculate compound centrality."""
     centrality = Counter()
@@ -145,30 +165,31 @@ def find_ebc_breaks(connector, n=10):
     for i in range(n):
         new_breaks = set()
         break_compounds = set()
-        c = sorted(iteritems(reaction_centrality(connector)),
+        c = sorted(iteritems(reaction_pair_centrality(connector)),
                    key=lambda x: x[1], reverse=True)
         max_value = c[0][1]
-        for (reaction, cpair), value in c:
-            if value < max_value:
-                logger.info('No more breaks: {}, {}'.format(
-                    reaction, value))
-                break
+        for cpair, value in c:
             c1, c2 = cpair
+
+            if value < max_value:
+                logger.info('No more breaks: {}<->{}, {}'.format(
+                    c1, c2, value))
+                break
+
             if c1 in break_compounds or c2 in break_compounds:
-                logger.info('Skipping {} because compound'
-                            ' already broken'.format(reaction))
+                logger.info('Skipping {}<->{} because compound'
+                            ' already broken'.format(c1, c2))
                 continue
-            logger.info('Break at {} ({}<->{}), {}'.format(
-                reaction, c1, c2, value))
-            new_breaks.add((reaction, cpair))
+            logger.info('Break at {}<->{}, {}'.format(c1, c2, value))
+            new_breaks.add(cpair)
             connector.add_break(c1, c2)
             break_compounds.add(c1)
             break_compounds.add(c2)
 
         with open('ebc-{}.tsv'.format(i), 'w') as f:
-            for (reaction, cpair), value in c:
-                f.write('{}\t{}\t{}\t{}\n'.format(
-                    reaction, cpair[0], cpair[1], value))
+            for (c1, c2), value in c:
+                f.write('{}\t{}\t{}\n'.format(
+                    c1, c2, value))
 
         break_order.append(new_breaks)
 
@@ -673,7 +694,7 @@ class PathwaysCommand(MetabolicMixin, Command):
                     key1 = compound, reaction
                     key2 = other, reaction
                     cpair = tuple(sorted([compound, other]))
-                    if (reaction, cpair) in breaks:
+                    if cpair in breaks:
                         if key1 not in compound_reaction:
                             rid = next(reaction_ids)
                             compound_reaction[key1] = rid
@@ -711,7 +732,8 @@ class PathwaysCommand(MetabolicMixin, Command):
                         if rid != other_rid:
                             logger.info('Removing {}...'.format(other_rid))
                             for c in reaction_compound[other_rid]:
-                                compound_reaction[c, reaction] = rid
+                                key = c, reaction
+                                compound_reaction[key] = rid
                                 reaction_compound[rid].add(c)
                                 logger.info('Moving {} to {}'.format(c, rid))
 
