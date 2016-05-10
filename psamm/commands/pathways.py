@@ -100,7 +100,7 @@ def dijkstra_shortest(connector, breaks, source):
 def reaction_centrality(connector, breaks):
     """Calculate reaction centrality."""
     centrality = Counter()
-    for initial in connector.compounds_forward():
+    for initial in connector.compounds():
         dependency = Counter()
         reaction_dependency = Counter()
         dist, prev_node, path_count = dijkstra_shortest(
@@ -125,7 +125,7 @@ def reaction_centrality(connector, breaks):
 def compound_centrality(connector, breaks):
     """Calculate compound centrality."""
     centrality = Counter()
-    for initial in connector.compounds_forward():
+    for initial in connector.compounds():
         dependency = Counter()
         dist, prev_node, path_count = dijkstra_shortest(
             connector, breaks, initial)
@@ -237,7 +237,7 @@ def tarjan_components(connector, breaks):
 
         logger.info('Done with {}'.format(compound))
 
-    for compound in connector.compounds_forward():
+    for compound in connector.compounds():
         if compound not in compound_index:
             strong_connect(compound)
 
@@ -249,7 +249,7 @@ def calculate_compound_degree(connector):
     indegree = Counter()
     outdegree = Counter()
 
-    for compound in connector.compounds_forward():
+    for compound in connector.compounds():
         for other, reactions in connector.iter_all_forward(compound):
             outdegree[compound] += 1
             indegree[other] += 1
@@ -263,12 +263,10 @@ def calculate_clustering_coefficients(connector):
     Return neighborhood size and raw edge saturation count.
     """
     values = {}
-    for compound in connector.compounds_forward():
+    for compound in connector.compounds():
         # Neighborhood is the set of compounds with out-edges to compound or
         # in-edges from compound.
         neighborhood = set(
-            other for other, _ in connector.iter_all_forward(compound))
-        neighborhood.update(
             other for other, _ in connector.iter_all(compound))
 
         n_size = len(neighborhood)
@@ -629,7 +627,7 @@ class PathwaysCommand(MetabolicMixin, Command):
         reaction_pairs = {}
         reaction_props = {}
         split_reaction = set()
-        for compound in connector.compounds_forward():
+        for compound in connector.compounds():
             for other, reactions in connector.iter_all_forward(compound):
                 for (reaction, direction), cost in iteritems(reactions):
                     if cost is None:
@@ -733,7 +731,7 @@ class PathwaysCommand(MetabolicMixin, Command):
         compound_id_map = {}
         inbound_reaction = {}
         outbound_reaction = {}
-        for compound in connector.compounds_forward():
+        for compound in connector.compounds():
             compound_connected = False
             for other, reactions in connector.iter_all_forward(compound):
                 for (reaction, direction), cost in iteritems(reactions):

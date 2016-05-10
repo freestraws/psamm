@@ -19,7 +19,7 @@ import re
 import math
 import logging
 from collections import Counter
-from itertools import product
+from itertools import product, chain
 
 from .reaction import Reaction, Compound, Direction
 from .formula import Formula, Atom
@@ -166,8 +166,9 @@ class Connector(object):
     def __init__(self, model, subset):
         self._model = model
         self._subset = subset
-        self._forward = {}  # Map reactants to products
-        self._connections = {}  # Reverse connections
+        self._forward = {}
+        self._reverse = {}
+        self._compounds = set()
         self._cache_pairs()
 
     def _cache_pairs(self):
@@ -178,7 +179,8 @@ class Connector(object):
             rx = reaction.equation
             if rx.direction.forward:
                 for metabolite, _ in rx.right:
-                    known_reactants = self._connections.setdefault(
+                    self._compounds.add(metabolite)
+                    known_reactants = self._reverse.setdefault(
                         metabolite, {})
                     for reactant, _ in rx.left:
                         if self._filter_reaction_pairs(
@@ -188,6 +190,7 @@ class Connector(object):
                         entry = self._cache_state(
                             reaction, Direction.Forward, reactant, metabolite)
                         if entry is not None:
+                            self._compounds.add(reactant)
                             reactions = known_reactants.setdefault(
                                 reactant, {})
                             reactions[reaction.id, Direction.Forward] = entry
@@ -196,7 +199,8 @@ class Connector(object):
                                     reaction.id, Direction.Forward] = entry
             if rx.direction.reverse:
                 for metabolite, _ in rx.left:
-                    known_reactants = self._connections.setdefault(
+                    self._compounds.add(metabolite)
+                    known_reactants = self._reverse.setdefault(
                         metabolite, {})
                     for reactant, _ in rx.right:
                         if self._filter_reaction_pairs(
@@ -206,6 +210,7 @@ class Connector(object):
                         entry = self._cache_state(
                             reaction, Direction.Reverse, reactant, metabolite)
                         if entry is not None:
+                            self._compounds.add(reactant)
                             reactions = known_reactants.setdefault(
                                 reactant, {})
                             reactions[reaction.id, Direction.Reverse] = entry
@@ -214,27 +219,32 @@ class Connector(object):
                                     reaction.id, Direction.Forward] = entry
 
     def compounds(self):
-        return iter(self._connections)
-
-    def compounds_forward(self):
-        return iter(self._forward)
+        return iter(self._compounds)
 
     def iter_all(self, compound):
-        return iteritems(self._connections.get(compound, {}))
+        return chain(self.iter_all_forward(compound),
+                     self.iter_all_reverse(compound))
 
     def iter_all_forward(self, compound):
         return iteritems(self._forward.get(compound, {}))
 
+    def iter_all_reverse(self, compound):
+        return iteritems(self._reverse.get(compound, {}))
+
     def has(self, c1, c2):
-        return c1 in self._connections and c2 in self._connections[c1]
+        return self.has_forward(c1, c2) or self.has_reverse(c1, c2)
 
     def has_forward(self, c1, c2):
         return c1 in self._forward and c2 in self._forward[c1]
 
-    def get(self, c1, c2):
-        if c1 not in self._connections:
-            return None
-        return self._connections[c1].get(c2, None)
+    def has_reverse(self, c1, c2):
+        return c1 in self._reverse and c2 in self._reverse[c1]
+
+    def get_forward(self, c1, c2):
+        return self._forward.get(c1, {}).get(c2, None)
+
+    def get_reverse(self, c1, c2):
+        return self._reverse.get(c1, {}).get(c2, None)
 
     def _filter_reaction_pairs(self, reaction, c_left, c_right):
         return False
@@ -366,7 +376,8 @@ def find_pathways(connector, source, dest):
             yield list(node.pathway()), node.g_score
             continue
 
-        for next_compound, next_reactions in connector.iter_all(node.compound):
+        neighbors = connector.iter_all_reverse(node.compound)
+        for next_compound, next_reactions in neighbors:
             skip_compound = False
             for n in node.pathway():
                 if n.compound == next_compound:
@@ -419,13 +430,13 @@ def check_cost_function(connector):
 
     for c1 in connector.compounds():
         logger.info('Checking compound {}...'.format(c1))
-        for c2, c1_reactions in connector.iter_all(c1):
-            for c3, c2_reactions in connector.iter_all(c2):
-                if connector.has(c1, c3):
+        for c2, c1_reactions in connector.iter_all_reverse(c1):
+            for c3, c2_reactions in connector.iter_all_reverse(c2):
+                if connector.has_reverse(c1, c3):
                     for (r1, cost1), (r2, cost2), (r3, cost3) in product(
                             iteritems(c1_reactions),
                             iteritems(c2_reactions),
-                            iteritems(connector.get(c1, c3))):
+                            iteritems(connector.get_reverse(c1, c3))):
                         if cost1 + cost2 < cost3:
                             logger.warning(
                                 'Invalid distance:'
