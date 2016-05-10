@@ -397,14 +397,17 @@ class PathwaysCommand(MetabolicMixin, Command):
         with open('connector_compounds.tsv', 'w') as f:
             self.write_connector_compounds_matrix(f, self._mm, connector)
 
-        def compound_label(compound):
+        def extended_compound_label(compound):
             label = str(compound)
             if compound in coeffs:
                 label += '\n{:.2f}'.format(
                     connectivity_score(*coeffs[compound]))
             return label
 
-        def reaction_label(reaction, pairs):
+        def compound_label(compound):
+            return str(compound)
+
+        def extended_reaction_label(reaction, pairs):
             label = str(reaction)
             for pair in pairs:
                 spair = tuple(sorted(pair))
@@ -412,6 +415,9 @@ class PathwaysCommand(MetabolicMixin, Command):
                     label += '\n{}<=>{}: {:.2f}'.format(
                         pair[0], pair[1], centrality[reaction, spair])
             return label
+
+        def reaction_label(reaction, pairs):
+            return str(reaction)
 
         with open('connector.dot', 'w') as f:
             self.write_connector_graph(
