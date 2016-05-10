@@ -301,6 +301,63 @@ class UndirectedConnector(Connector):
     get_reverse = _get
 
 
+class CompoundPairSubsetConnector(Connector):
+    """Connector wrapper that removes a subset of compound pairs."""
+    def __init__(self, connector, breaks=None):
+        self._connector = connector
+        self._breaks = set()
+        if breaks is not None:
+            for b in breaks:
+                self.add_break(*b)
+
+    def breaks(self):
+        return iter(self._breaks)
+
+    def add_break(self, c1, c2):
+        self._breaks.add(tuple(sorted((c1, c2))))
+
+    def remove_break(self, c1, c2):
+        self._breaks.remove(tuple(sorted((c1, c2))))
+
+    def compounds(self):
+        return self._connector.compounds()
+
+    def _iter_all_dir(self, compound, it):
+        for other, reactions in it(compound):
+            cpair = tuple(sorted((compound, other)))
+            if cpair not in self._breaks:
+                yield other, reactions
+
+    def iter_all_forward(self, compound):
+        return self._iter_all_dir(compound, self._connector.iter_all_forward)
+
+    def iter_all_reverse(self, compound):
+        return self._iter_all_dir(compound, self._connector.iter_all_reverse)
+
+    def _has_dir(self, c1, c2, func):
+        cpair = tuple(sorted((c1, c2)))
+        return cpair not in self._breaks and func(c1, c2)
+
+    def has_forward(self, c1, c2):
+        return self._has_dir(c1, c2, self._connector.has_forward)
+
+    def has_reverse(self, c1, c2):
+        return self._has_dir(c1, c2, self._connector.has_reverse)
+
+    def _get_dir(self, c1, c2, func):
+        cpair = tuple(sorted((c1, c2)))
+        if cpair in self._breaks:
+            return None
+
+        return func(c1, c2)
+
+    def get_forward(self, c1, c2):
+        return self._get_dir(c1, c2, self._connector.get_forward)
+
+    def get_reverse(self, c1, c2):
+        return self._get_dir(c1, c2, self._connector.get_reverse)
+
+
 class RpairConnector(CostConnector):
     def __init__(self, model, subset, cost_func):
         self._rpairs = {}
