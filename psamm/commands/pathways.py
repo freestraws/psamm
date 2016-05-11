@@ -21,7 +21,7 @@ import logging
 from itertools import product, count
 from collections import defaultdict, Counter
 
-from ..command import Command, MetabolicMixin, CommandError
+from ..command import Command, MetabolicMixin, ParallelTaskMixin, CommandError
 from ..reaction import Compound, Direction
 from .. import pathways, graph
 from ..datasource.reaction import parse_compound
@@ -122,22 +122,19 @@ def reaction_centrality(connector):
     return centrality
 
 
-def reaction_pair_centrality(connector):
+def reaction_pair_centrality(connector, create_executor):
     """Calculate reaction pair centrality."""
+
     centrality = Counter()
-    for initial in connector.compounds():
-        dependency = Counter()
-        dist, prev_node, path_count = dijkstra_shortest(connector, initial)
 
-        for compound, d in sorted(
-                iteritems(dist), key=lambda x: x[1], reverse=True):
-            for other, reaction_set in prev_node[compound]:
-                ratio = path_count[other] / float(path_count[compound])
-                dep = ratio * (1 + dependency[compound])
-                dependency[other] += dep
+    executor = create_executor(
+        EBCTaskHandler, (connector,), cpus_per_worker=1)
+    with executor:
+        for initial, cent in executor.imap_unordered(
+                ((c,) for c in connector.compounds()), 100):
+            centrality += cent
 
-                cpair = tuple(sorted([compound, other]))
-                centrality[cpair] += dep
+    executor.join()
 
     return centrality
 
@@ -161,15 +158,16 @@ def compound_centrality(connector):
     return centrality
 
 
-def find_ebc_breaks(connector, n=10):
+def find_ebc_breaks(connector, create_executor, n=10):
     connector = pathways.CompoundPairSubsetConnector(connector)
     break_order = []
 
     for i in range(n):
         new_breaks = set()
         break_compounds = set()
-        c = sorted(iteritems(reaction_pair_centrality(connector)),
-                   key=lambda x: x[1], reverse=True)
+        centrality = reaction_pair_centrality(connector, create_executor)
+        c = sorted(iteritems(centrality), key=lambda x: x[1], reverse=True)
+
         max_value = c[0][1]
         for cpair, value in c:
             c1, c2 = cpair
@@ -193,6 +191,28 @@ def find_ebc_breaks(connector, n=10):
 
     logger.info('Breaks: {}'.format(break_order))
     return set(connector.breaks())
+
+
+class EBCTaskHandler(object):
+    def __init__(self, connector):
+        self._connector = connector
+
+    def handle_task(self, source):
+        centrality = Counter()
+        dependency = Counter()
+        dist, prev_node, path_count = dijkstra_shortest(
+            self._connector, source)
+        for compound, d in sorted(
+                iteritems(dist), key=lambda x: x[1], reverse=True):
+            for other, _ in prev_node[compound]:
+                ratio = path_count[other] / float(path_count[compound])
+                dep = ratio * (1 + dependency[compound])
+                dependency[other] += dep
+
+                cpair = tuple(sorted([compound, other]))
+                centrality[cpair] += dep
+
+        return centrality
 
 
 def find_components(connector):
@@ -322,7 +342,7 @@ def calculate_clustering_coefficients(connector):
     return values
 
 
-class PathwaysCommand(MetabolicMixin, Command):
+class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
     """Find shortest paths between two compounds."""
 
     @classmethod
@@ -398,7 +418,8 @@ class PathwaysCommand(MetabolicMixin, Command):
         connector = pathways.RpairConnector(self._model, subset, cost_func)
 
         breaks = find_ebc_breaks(
-            pathways.UndirectedConnector(connector), self._args.breaks)
+            pathways.UndirectedConnector(connector),
+            self._create_executor, self._args.breaks)
         break_connector = pathways.CompoundPairSubsetConnector(
             connector, breaks)
 
