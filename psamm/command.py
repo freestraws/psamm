@@ -208,11 +208,28 @@ class ExecutorError(Exception):
     """Error running tasks on executor."""
 
 
+class _ExecutorTasks(object):
+    """Input to child process wrapping a task list."""
+    def __init__(self, tasks):
+        self._tasks = tasks
+
+    def __iter__(self):
+        return iter(self._tasks)
+
+    def __len__(self):
+        return len(self._tasks)
+
+
+class _ExecutorData(tuple):
+    """Input to child process containing user data."""
+
+
 class _ExecutorProcess(mp.Process):
-    def __init__(self, task_queue, result_queue, handler_init,
+    def __init__(self, process_id, input_queue, result_queue, handler_init,
                  handler_args=()):
         super(_ExecutorProcess, self).__init__()
-        self._task_queue = task_queue
+        self._process_id = process_id
+        self._input_queue = input_queue
         self._result_queue = result_queue
         self._handler_init = handler_init
         self._handler_args = handler_args
@@ -220,10 +237,16 @@ class _ExecutorProcess(mp.Process):
     def run(self):
         try:
             handler = self._handler_init(*self._handler_args)
-            for tasks in iter(self._task_queue.get, None):
-                results = [
-                    (task, handler.handle_task(*task)) for task in tasks]
-                self._result_queue.put(results)
+            for input_data in iter(self._input_queue.get, None):
+                if isinstance(input_data, _ExecutorTasks):
+                    for task in input_data:
+                        result = handler.handle_task(*task)
+                        self._result_queue.put((
+                            self._process_id, task, result))
+                elif isinstance(input_data, _ExecutorData):
+                    handler.receive_data(*input_data)
+                else:
+                    raise ValueError('Invalid data in input queue')
         except BaseException:
             self._result_queue.put(_ErrorMarker())
             raise
@@ -249,25 +272,31 @@ class ProcessPoolExecutor(Executor):
             except NotImplementedError:
                 processes = 1
 
+        if processes <= 0:
+            raise ValueError('Number of processes must be positive')
+
         self._process_count = processes
         self._processes = []
-        self._task_queue = mp.Queue()
+        self._task_queue = []
         self._result_queue = mp.Queue()
 
-        for _ in range(self._process_count):
+        for process_id in range(self._process_count):
+            task_queue = mp.Queue()
+            self._task_queue.append(task_queue)
             p = _ExecutorProcess(
-                self._task_queue, self._result_queue, handler_init,
+                process_id, task_queue, self._result_queue, handler_init,
                 handler_args)
             p.start()
             self._processes.append(p)
 
     def apply(self, task):
-        self._task_queue.put([task])
-        results = self._result_queue.get()
-        if isinstance(results, _ErrorMarker):
+        self._task_queue[0].put(_ExecutorTasks([task]))
+        output = self._result_queue.get()
+        if isinstance(output, _ErrorMarker):
             raise ExecutorError('Child process failed')
 
-        return next(itervalues(results))
+        _, _, result = output
+        return output
 
     def imap_unordered(self, iterable, chunksize=1):
         def iter_chunks():
@@ -279,31 +308,42 @@ class ProcessPoolExecutor(Executor):
 
         it = iter_chunks()
         workers = 0
-        for i in range(self._process_count):
+        tasks_left = {}
+        for process_id in range(self._process_count):
             tasks = next(it, None)
             if tasks is None:
                 break
 
-            self._task_queue.put(tasks)
+            tasks_left[process_id] = len(tasks)
+            self._task_queue[process_id].put(_ExecutorTasks(tasks))
             workers += 1
 
         while workers > 0:
-            results = self._result_queue.get()
-            if isinstance(results, _ErrorMarker):
+            output = self._result_queue.get()
+            if isinstance(output, _ErrorMarker):
                 raise ExecutorError('Child process failed')
 
-            tasks = next(it, None)
-            if tasks is None:
-                workers -= 1
+            process_id, task, result = output
+            tasks_left[process_id] -= 1
 
-            self._task_queue.put(tasks)
+            if tasks_left[process_id] == 0:
+                tasks = next(it, None)
+                if tasks is not None:
+                    tasks_left[process_id] += len(tasks)
+                    self._task_queue[process_id].put(_ExecutorTasks(tasks))
+                else:
+                    workers -= 1
 
-            for task, result in results:
-                yield task, result
+            yield task, result
+
+    def send_data(self, *args):
+        """Send user data to all workers."""
+        for task_queue in self._task_queue:
+            task_queue.put(_ExecutorData(args))
 
     def close(self):
-        for i in range(self._process_count):
-            self._task_queue.put(None)
+        for task_queue in self._task_queue:
+            task_queue.put(None)
 
     def join(self):
         for p in self._processes:
