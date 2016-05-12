@@ -162,32 +162,55 @@ def find_ebc_breaks(connector, create_executor, n=10):
     connector = pathways.CompoundPairSubsetConnector(connector)
     break_order = []
 
-    for i in range(n):
-        new_breaks = set()
-        break_compounds = set()
-        centrality = reaction_pair_centrality(connector, create_executor)
-        c = sorted(iteritems(centrality), key=lambda x: x[1], reverse=True)
+    def compound_groups(size):
+        group = []
+        for compound in connector.compounds():
+            group.append(compound)
+            if len(group) == size:
+                yield group
+                group = []
 
-        max_value = c[0][1]
-        for cpair, value in c:
-            c1, c2 = cpair
+        if len(group) > 0:
+            yield group
 
-            if value < max_value:
-                logger.info('No more breaks: {}<->{}, {}'.format(
-                    c1, c2, value))
-                break
+    executor = create_executor(EBCTaskHandler, (connector,), cpus_per_worker=1)
+    with executor:
+        for i in range(n):
+            logger.info('Break {}'.format(i))
 
-            if c1 in break_compounds or c2 in break_compounds:
-                logger.info('Skipping {}<->{} because compound'
-                            ' already broken'.format(c1, c2))
-                continue
-            logger.info('Break at {}<->{}, {}'.format(c1, c2, value))
-            new_breaks.add(cpair)
-            connector.add_break(c1, c2)
-            break_compounds.add(c1)
-            break_compounds.add(c2)
+            new_breaks = set()
+            break_compounds = set()
+            centrality = Counter()
+            for initial, cent in executor.imap_unordered(
+                    ((group,) for group in compound_groups(32))):
+                centrality += cent
+
+            c = sorted(iteritems(centrality), key=lambda x: x[1], reverse=True)
+
+            max_value = c[0][1]
+            for cpair, value in c:
+                c1, c2 = cpair
+
+                if value < max_value:
+                    logger.info('No more breaks: {}<->{}, {}'.format(
+                        c1, c2, value))
+                    break
+
+                if c1 in break_compounds or c2 in break_compounds:
+                    logger.info('Skipping {}<->{} because compound'
+                                ' already broken'.format(c1, c2))
+                    continue
+                logger.info('Break at {}<->{}, {}'.format(c1, c2, value))
+                new_breaks.add(cpair)
+                connector.add_break(c1, c2)
+                break_compounds.add(c1)
+                break_compounds.add(c2)
+
+            executor.send_data(new_breaks)
 
         break_order.append(new_breaks)
+
+    executor.join()
 
     logger.info('Breaks: {}'.format(break_order))
     return set(connector.breaks())
@@ -197,22 +220,27 @@ class EBCTaskHandler(object):
     def __init__(self, connector):
         self._connector = connector
 
-    def handle_task(self, source):
+    def handle_task(self, sources):
         centrality = Counter()
-        dependency = Counter()
-        dist, prev_node, path_count = dijkstra_shortest(
-            self._connector, source)
-        for compound, d in sorted(
-                iteritems(dist), key=lambda x: x[1], reverse=True):
-            for other, _ in prev_node[compound]:
-                ratio = path_count[other] / float(path_count[compound])
-                dep = ratio * (1 + dependency[compound])
-                dependency[other] += dep
+        for source in sources:
+            dependency = Counter()
+            dist, prev_node, path_count = dijkstra_shortest(
+                self._connector, source)
+            for compound, d in sorted(
+                    iteritems(dist), key=lambda x: x[1], reverse=True):
+                for other, _ in prev_node[compound]:
+                    ratio = path_count[other] / float(path_count[compound])
+                    dep = ratio * (1 + dependency[compound])
+                    dependency[other] += dep
 
-                cpair = tuple(sorted([compound, other]))
-                centrality[cpair] += dep
+                    cpair = tuple(sorted([compound, other]))
+                    centrality[cpair] += dep
 
         return centrality
+
+    def receive_data(self, breaks):
+        for c1, c2 in breaks:
+            self._connector.add_break(c1, c2)
 
 
 def find_components(connector):
