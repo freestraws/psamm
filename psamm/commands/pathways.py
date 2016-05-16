@@ -20,6 +20,7 @@ import csv
 import logging
 from itertools import product, count
 from collections import defaultdict, Counter
+import subprocess
 
 from ..command import Command, MetabolicMixin, ParallelTaskMixin, CommandError
 from ..reaction import Compound, Direction
@@ -214,6 +215,30 @@ def find_ebc_breaks(connector, create_executor, n=10):
 
     logger.info('Breaks: {}'.format(break_order))
     return set(connector.breaks())
+
+
+def find_ebc_breaks_cpp(connector, n=10):
+    p = subprocess.Popen(
+        ['ebc', str(n)], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        for compound in connector.compounds():
+            for other, _ in connector.iter_all_forward(compound):
+                p.stdin.write('{}\t{}\n'.format(compound, other))
+
+        stdout, _ = p.communicate()
+    except:
+        p.kill()
+        raise
+
+    breaks = set()
+    for line in stdout.split('\n'):
+        if line != '':
+            row = line.split('\t')
+            cpair = parse_compound(row[0]), parse_compound(row[1])
+            logger.info('Break at {}'.format(cpair))
+            breaks.add(cpair)
+
+    return breaks
 
 
 class EBCTaskHandler(object):
@@ -445,9 +470,9 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
         #connector = pathways.Connector(self._model, cost_func, disconnect)
         connector = pathways.RpairConnector(self._model, subset, cost_func)
 
-        breaks = find_ebc_breaks(
+        breaks = find_ebc_breaks_cpp(
             pathways.UndirectedConnector(connector),
-            self._create_executor, self._args.breaks)
+            self._args.breaks)
         break_connector = pathways.CompoundPairSubsetConnector(
             connector, breaks)
 
