@@ -126,13 +126,24 @@ def reaction_centrality(connector):
 def reaction_pair_centrality(connector, create_executor):
     """Calculate reaction pair centrality."""
 
+    def compound_groups(size):
+        group = []
+        for compound in connector.compounds():
+            group.append(compound)
+            if len(group) == size:
+                yield group
+                group = []
+
+        if len(group) > 0:
+            yield group
+
     centrality = Counter()
 
     executor = create_executor(
         EBCTaskHandler, (connector,), cpus_per_worker=1)
     with executor:
         for initial, cent in executor.imap_unordered(
-                ((c,) for c in connector.compounds()), 100):
+                ((group,) for group in compound_groups(32))):
             centrality += cent
 
     executor.join()
