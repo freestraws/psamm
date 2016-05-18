@@ -422,8 +422,6 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
         parser.add_argument(
             '--edge-values', type=str, default=None, help='Values for edges')
         parser.add_argument(
-            '--clusters', type=str, default=None, help='Reaction clusters')
-        parser.add_argument(
             '--breaks', type=int, default=0, help='EBC breaks')
         super(PathwaysCommand, cls).init_parser(parser)
 
@@ -464,15 +462,6 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
                             edge_values[compound, reaction] = (
                                 -flux * float(value))
 
-        clusters = {}
-        if self._args.clusters is not None:
-            with open(self._args.clusters, 'r') as f:
-                f.readline()  # skip header
-                for row in csv.reader(f, delimiter='\t'):
-                    reaction_id = row[0]
-                    cluster_id = row[1]
-                    clusters[reaction_id] = cluster_id
-
         #cost_func = pathways.FormulaCostFunction(self._model)
         cost_func = pathways.JaccardCostFunction(self._model)
         #cost_func = pathways.UniformCostFunction()
@@ -498,6 +487,12 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
             logger.info('{}'.format(component))
         logger.info('{} components (>2: {})'.format(
             len(components), sum(len(c) > 2 for c in components)))
+
+        # Compound clusters
+        clusters = {}
+        for i, component in enumerate(components):
+            for compound in component:
+                clusters[compound] = i
 
         indegree, outdegree = calculate_compound_degree(connector)
         degree = indegree + outdegree
@@ -555,10 +550,20 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
         def reaction_label(reaction, pairs):
             return str(reaction)
 
-        with open('connector.dot', 'w') as f:
-            self.write_connector_graph(
-                f, connector, self._mm, biomass_reaction, edge_values,
-                clusters, breaks, compound_label, reaction_label)
+        cluster_sets = {}
+        for compound, cluster in iteritems(clusters):
+            cluster_sets.setdefault(cluster, set()).add(compound)
+        for i, cluster in enumerate(sorted(
+                itervalues(cluster_sets), key=lambda x: len(x), reverse=True)):
+            with open('cluster-{:04}.tsv'.format(i), 'w') as f:
+                for compound in sorted(cluster):
+                    f.write('{}\n'.format(compound))
+            with open('connector-cluster{:04}.dot'.format(i), 'w') as f:
+                logger.info('Writing graph of cluster {}: size={}'.format(
+                    i, len(cluster)))
+                self.write_connector_graph(
+                    f, connector, self._mm, biomass_reaction, edge_values,
+                    cluster, breaks, compound_label, reaction_label)
 
         with open('reactions.dot', 'w') as f:
             self.write_reaction_graph(
@@ -739,7 +744,7 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
                 compound, '\t'.join(str(x) for x in values)))
 
     def write_connector_graph(
-            self, f, connector, model, biomass, edge_values, clusters,
+            self, f, connector, model, biomass, edge_values, cluster,
             breaks, compound_label=None, reaction_label=None):
         g = graph.Graph()
 
@@ -765,40 +770,23 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
         reaction_pairs = {}
         reaction_props = {}
         split_reaction = set()
+        compound_set = set()
         for compound in connector.compounds():
             for other, reactions in connector.iter_all_forward(compound):
                 for (reaction, direction), cost in iteritems(reactions):
                     if cost is None:
                         continue
 
-                    logger.info('Compounds: {}, {}, reaction: {}'.format(
-                        compound, other, reaction))
+                    if compound not in cluster and other not in cluster:
+                        continue
+
+                    compound_set.add(compound)
+                    compound_set.add(other)
 
                     key1 = compound, reaction
                     key2 = other, reaction
                     cpair = tuple(sorted([compound, other]))
-                    if cpair in breaks:
-                        if key1 not in compound_reaction:
-                            rid = next(reaction_ids)
-                            compound_reaction[key1] = rid
-                            reaction_compound[rid] = {compound}
-                            reaction_name[rid] = reaction
-                            split_reaction.add(rid)
-                        else:
-                            split_reaction.add(compound_reaction[key1])
-
-                        if key2 not in compound_reaction:
-                            rid = next(reaction_ids)
-                            compound_reaction[key2] = rid
-                            reaction_compound[rid] = {other}
-                            reaction_name[rid] = reaction
-                            split_reaction.add(rid)
-                        else:
-                            split_reaction.add(compound_reaction[key2])
-
-                        logger.info('Keeping {}, {} separate'.format(
-                            compound, other))
-                    elif (key1 not in compound_reaction and
+                    if (key1 not in compound_reaction and
                             key2 not in compound_reaction):
                         rid = next(reaction_ids)
                         compound_reaction[key1] = rid
@@ -806,19 +794,15 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
                         reaction_compound[rid] = {compound, other}
                         reaction_name[rid] = reaction
                         reaction_pairs[rid] = {(compound, other)}
-                        logger.info('Putting {}, {} in {}'.format(
-                            compound, other, rid))
                     elif (key1 in compound_reaction and
                             key2 in compound_reaction):
                         rid = compound_reaction[key1]
                         other_rid = compound_reaction[key2]
                         if rid != other_rid:
-                            logger.info('Removing {}...'.format(other_rid))
                             for c in reaction_compound[other_rid]:
                                 key = c, reaction
                                 compound_reaction[key] = rid
                                 reaction_compound[rid].add(c)
-                                logger.info('Moving {} to {}'.format(c, rid))
 
                             # Add new pair and transfer from other reaction
                             reaction_pairs.setdefault(rid, set()).add(
@@ -836,7 +820,6 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
                         reaction_name[rid] = reaction
                         reaction_pairs.setdefault(rid, set()).add(
                             (compound, other))
-                        logger.info('Putting {} in {}'.format(other, rid))
                     elif key2 in compound_reaction:
                         rid = compound_reaction[key2]
                         compound_reaction[key1] = rid
@@ -844,15 +827,11 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
                         reaction_name[rid] = reaction
                         reaction_pairs.setdefault(rid, set()).add(
                             (compound, other))
-                        logger.info('Putting {} in {}'.format(compound, rid))
 
         for rid, reaction in iteritems(reaction_name):
             color = _REACTION_COLOR
             if rid in split_reaction:
                 color = _ALT_COLOR
-
-            logger.info('{}, {}: {}'.format(
-                rid, reaction, reaction_pairs.get(rid, set())))
 
             label = reaction_label(reaction, reaction_pairs.get(rid, set()))
 
@@ -867,7 +846,6 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
 
         # Create dicts of inbound/outbound edges for reactions.
         compound_props = {}
-        compound_id_map = {}
         inbound_reaction = {}
         outbound_reaction = {}
         for compound in connector.compounds():
@@ -877,39 +855,27 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
                     if cost is None:
                         continue
 
-                    cluster = clusters.get(reaction)
+                    if compound not in cluster and other not in cluster:
+                        continue
 
-                    # Create compound nodes for cluster
-                    if (compound, cluster) not in compound_id_map:
-                        logger.info('Creating {}, {}'.format(compound, cluster))
-                        compound_id = next(compound_ids)
-                        compound_id_map[compound, cluster] = compound_id
-                        compound_props[compound_id] = {
-                            'label': compound_label(compound),
-                            'fillcolor': _COMPOUND_COLOR
-                        }
-                    else:
-                        compound_id = compound_id_map[compound, cluster]
-
-                    if (other, cluster) not in compound_id_map:
-                        logger.info('Creating {}, {}'.format(other, cluster))
-                        other_id = next(compound_ids)
-                        compound_id_map[other, cluster] = other_id
-                        compound_props[other_id] = {
-                            'label': compound_label(other),
-                            'fillcolor': _COMPOUND_COLOR
-                        }
-                    else:
-                        other_id = compound_id_map[other, cluster]
+                    for c in (compound, other):
+                        if c not in compound_props:
+                            color = _COMPOUND_COLOR
+                            if c not in cluster:
+                                color = _ALT_COLOR
+                            compound_props[c] = {
+                                'label': compound_label(c),
+                                'fillcolor': color
+                            }
 
                     # Create inbound/outbound connections
-                    key = compound_reaction[other, reaction], other_id
+                    key = compound_reaction[other, reaction], other
                     if key not in outbound_reaction:
                         outbound_reaction[key] = 0
                     outbound_reaction[key] += edge_values.get(
                         (reaction, other), 0)
 
-                    key = compound_id, compound_reaction[compound, reaction]
+                    key = compound, compound_reaction[compound, reaction]
                     if key not in inbound_reaction:
                         inbound_reaction[key] = 0
                     inbound_reaction[key] += edge_values.get(
@@ -920,10 +886,9 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
             if not model.is_exchange(reaction):
                 continue
 
-            cluster = clusters.get(reaction)
             rx = model.get_reaction(reaction)
-            for c, _ in rx.compounds:
-                if (c, cluster) in compound_id_map:
+            for compound, _ in rx.compounds:
+                if compound in compound_set:
                     reaction_id = next(reaction_ids)
                     reaction_name[reaction_id] = reaction
                     reaction_props[reaction_id] = {
@@ -931,18 +896,16 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
                         'fillcolor': _ACTIVE_COLOR
                     }
 
-                    compound_id = compound_id_map[c, cluster]
-                    inbound_reaction[compound_id, reaction_id] = (
-                        edge_values.get((c, reaction), 0))
-                    outbound_reaction[reaction_id, compound_id] = (
-                        edge_values.get((reaction, c), 0))
+                    inbound_reaction[compound, reaction_id] = (
+                        edge_values.get((compound, reaction), 0))
+                    outbound_reaction[reaction_id, compound] = (
+                        edge_values.get((reaction, compound), 0))
 
         # Add biomass reaction node to graph
         if biomass is not None:
-            cluster = clusters.get(biomass)
             rx = model.get_reaction(biomass)
-            for c, _ in rx.left:
-                if (c, cluster) in compound_id_map:
+            for compound, _ in rx.left:
+                if compound in compound_set:
                     reaction_id = next(reaction_ids)
                     reaction_name[reaction_id] = biomass
                     reaction_props[reaction_id] = {
@@ -950,9 +913,8 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
                         'fillcolor': _ACTIVE_COLOR
                     }
 
-                    compound_id = compound_id_map[c, cluster]
-                    inbound_reaction[compound_id, reaction_id] = (
-                        edge_values.get((c, biomass), 0))
+                    inbound_reaction[compound, reaction_id] = (
+                        edge_values.get((compound, biomass), 0))
 
         def edge_props(flux):
             props = {}
