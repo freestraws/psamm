@@ -568,9 +568,6 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
         with open('reactions.dot', 'w') as f:
             self.write_reaction_graph(
                 f, self._mm, self._mm.reactions, edge_values)
-
-        for r, v in iteritems(centrality):
-            logger.info('{}: {}'.format(r, v))
         return
 
         if self._args.source is not None:
