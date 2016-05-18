@@ -517,7 +517,7 @@ class PathwaysCommand(MetabolicMixin, ParallelTaskMixin, Command):
             logger.info('CC: {}: {}, {}'.format(
                 compound, value, connectivity_score(n_size, count)))
 
-        centrality = reaction_centrality(connector)
+        centrality = reaction_pair_centrality(connector, self._create_executor)
 
         with open('reactions.tsv', 'w') as f:
             self.write_reaction_matrix(f, self._mm)
